@@ -6,6 +6,14 @@
 
 Desktop remote control untuk Google TV / Android TV berbasis Rust dan Slint dengan fitur live view layar TV langsung di dalam aplikasi.
 
+<p align="center">
+  <img src="docs/images/screenshot_fullscreen.png" alt="Widescreen Live View Mode" width="720"/>
+  <br/><br/>
+  <img src="docs/images/screenshot_portrait.png" alt="Portrait Mode with Embedded Mini Screen" width="360"/>
+</p>
+
+> **Catatan Persyaratan Live Screen**: Kontrol tombol remote bekerja mandiri melalui protokol TLS (port 6466). Untuk mengaktifkan fitur **Live Screen**, **Network Debugging (ADB)** wajib aktif pada TV serta `adb` dan `ffmpeg` terpasang di sistem.
+
 ---
 
 ## Fitur
