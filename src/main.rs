@@ -1,9 +1,12 @@
-use atv_remote::app::{init_state, launch_mini_screen, map_key_string, SharedState};
+use atv_remote::app::{
+    get_adb_binary, init_state, launch_mini_screen, map_key_string, send_adb_key, SharedState,
+};
 use atv_remote::pairing::start_pairing;
 use atv_remote::remote::{run_remote_session, Command as RemoteCommand, ConnectionState};
 use atv_remote::ui::AppWindow;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use slint::{ComponentHandle, Weak};
+use std::process::Command as SysCommand;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -42,6 +45,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let weak = weak_window.clone();
                         let state = Arc::clone(&state_clone);
+
+                        // Warm up ADB in background
+                        let ip_clone = ip.clone();
+                        std::thread::spawn(move || {
+                            let adb_bin = get_adb_binary();
+                            let _ = SysCommand::new(adb_bin)
+                                .args(["connect", &format!("{}:5555", ip_clone.trim())])
+                                .output();
+                        });
 
                         current_session = Some(tokio::spawn(async move {
                             // Update UI status to Connecting
@@ -117,12 +129,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     Action::SendKey(key_name) => {
+                        let g = state_clone.lock().await;
+                        let last_ip = g.config.last_tv_ip.clone().unwrap_or_else(|| "192.168.1.12".to_string());
+                        let mut sent_tls = false;
+
                         if let Some((code, dir)) = map_key_string(&key_name) {
-                            let g = state_clone.lock().await;
                             if let Some(tx) = &g.cmd_tx {
-                                let _ = tx.send(RemoteCommand::SendKey(code, dir));
+                                if tx.send(RemoteCommand::SendKey(code, dir)).is_ok() {
+                                    sent_tls = true;
+                                }
                             }
                         }
+
+                        // Also send via ADB for instant dual-path responsiveness
+                        send_adb_key(&last_ip, &key_name);
+                        let _ = sent_tls;
                     }
 
                     Action::SubmitPin(pin) => {
