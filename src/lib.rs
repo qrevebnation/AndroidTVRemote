@@ -7,6 +7,7 @@ pub mod cert;
 pub mod codec;
 pub mod config;
 pub mod pairing;
+pub mod remote;
 pub mod proto {
     pub mod polo {
         include!(concat!(env!("OUT_DIR"), "/polo.wire.protobuf.rs"));
