@@ -2,17 +2,21 @@ use bytes::BytesMut;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::traits::PublicKeyParts;
 use rsa::RsaPublicKey;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use rustls::{ClientConfig, Error as RustlsError, SignatureScheme};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::ClientConfig;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
+use crate::cert::NoVerifyServerCert;
 use crate::codec::{decode_frame, encode_frame};
 use crate::proto::polo::*;
+
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(7);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PairingError {
@@ -30,54 +34,8 @@ pub enum PairingError {
     Protocol(String),
     #[error("Channel error")]
     ChannelClosed,
-}
-
-#[derive(Debug)]
-struct NoVerifyServerCert;
-
-impl ServerCertVerifier for NoVerifyServerCert {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, RustlsError> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ED25519,
-        ]
-    }
+    #[error("Network operation timed out")]
+    Timeout,
 }
 
 /// Computes the SHA-256 pairing secret from client/server RSA modulus & exponent and 6-hex-char PIN.
@@ -113,7 +71,6 @@ pub fn calculate_pairing_secret(
 
 /// Extracts RSA modulus and exponent from a DER-encoded X.509 certificate.
 pub fn extract_rsa_pubkey(cert_der: &[u8]) -> Result<(Vec<u8>, Vec<u8>), PairingError> {
-    // Parse SubjectPublicKeyInfo from X.509 certificate
     let cert = x509_parser::parse_x509_certificate(cert_der)
         .map_err(|e| PairingError::Protocol(format!("X509 parse error: {e}")))?;
     let spki_der = cert.1.tbs_certificate.subject_pki.raw;
@@ -126,9 +83,18 @@ pub fn extract_rsa_pubkey(cert_der: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Pairing
     Ok((modulus, exponent))
 }
 
-/// Executes the Android TV Remote v2 Polo pairing handshake on port 6466.
 pub async fn start_pairing(
     tv_ip: &str,
+    client_cert: &CertificateDer<'static>,
+    client_key: &PrivateKeyDer<'static>,
+    pin_rx: tokio::sync::oneshot::Receiver<String>,
+) -> Result<(), PairingError> {
+    start_pairing_with_port(tv_ip, 6466, client_cert, client_key, pin_rx).await
+}
+
+pub async fn start_pairing_with_port(
+    tv_ip: &str,
+    port: u16,
     client_cert: &CertificateDer<'static>,
     client_key: &PrivateKeyDer<'static>,
     pin_rx: tokio::sync::oneshot::Receiver<String>,
@@ -141,15 +107,21 @@ pub async fn start_pairing(
     config.alpn_protocols = vec![b"atvremote".to_vec()];
 
     let connector = TlsConnector::from(Arc::new(config));
-    let addr = format!("{}:6466", tv_ip);
-    let tcp = TcpStream::connect(&addr).await?;
+    let addr = format!("{}:{}", tv_ip, port);
+    let tcp = timeout(NETWORK_TIMEOUT, TcpStream::connect(&addr))
+        .await
+        .map_err(|_| PairingError::Timeout)??;
     let domain = ServerName::try_from("atvremote".to_string())
         .map_err(|_| PairingError::Protocol("Invalid server name".to_string()))?;
 
-    let mut tls = connector.connect(domain, tcp).await?;
+    let mut tls = timeout(NETWORK_TIMEOUT, connector.connect(domain, tcp))
+        .await
+        .map_err(|_| PairingError::Timeout)??;
 
-    // Extract server certificate
-    let server_cert = tls.get_ref().1.peer_certificates()
+    let server_cert = tls
+        .get_ref()
+        .1
+        .peer_certificates()
         .and_then(|certs| certs.first())
         .ok_or_else(|| PairingError::Protocol("No server certificate received".to_string()))?
         .clone();
@@ -176,9 +148,13 @@ pub async fn start_pairing(
     // 2. Read PairingRequestAck
     let mut temp = [0u8; 1024];
     loop {
-        let n = tls.read(&mut temp).await?;
+        let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
+            .await
+            .map_err(|_| PairingError::Timeout)??;
         if n == 0 {
-            return Err(PairingError::Protocol("Connection closed unexpectedly".to_string()));
+            return Err(PairingError::Protocol(
+                "Connection closed unexpectedly".to_string(),
+            ));
         }
         read_buf.extend_from_slice(&temp[..n]);
         if let Some(msg) = decode_frame::<OuterMessage>(&mut read_buf)? {
@@ -207,9 +183,13 @@ pub async fn start_pairing(
 
     // 4. Read Configuration
     loop {
-        let n = tls.read(&mut temp).await?;
+        let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
+            .await
+            .map_err(|_| PairingError::Timeout)??;
         if n == 0 {
-            return Err(PairingError::Protocol("Connection closed waiting for config".to_string()));
+            return Err(PairingError::Protocol(
+                "Connection closed waiting for config".to_string(),
+            ));
         }
         read_buf.extend_from_slice(&temp[..n]);
         if let Some(msg) = decode_frame::<OuterMessage>(&mut read_buf)? {
@@ -231,7 +211,8 @@ pub async fn start_pairing(
 
     // 6. Wait for PIN from user
     let pin = pin_rx.await.map_err(|_| PairingError::ChannelClosed)?;
-    let secret = calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, &pin)?;
+    let secret =
+        calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, &pin)?;
 
     // 7. Send Secret
     outer = OuterMessage {
@@ -247,14 +228,21 @@ pub async fn start_pairing(
 
     // 8. Read SecretAck
     loop {
-        let n = tls.read(&mut temp).await?;
+        let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
+            .await
+            .map_err(|_| PairingError::Timeout)??;
         if n == 0 {
-            return Err(PairingError::Protocol("Connection closed waiting for secret ack".to_string()));
+            return Err(PairingError::Protocol(
+                "Connection closed waiting for secret ack".to_string(),
+            ));
         }
         read_buf.extend_from_slice(&temp[..n]);
         if let Some(msg) = decode_frame::<OuterMessage>(&mut read_buf)? {
             if msg.status != outer_message::Status::Ok as i32 {
-                return Err(PairingError::Protocol(format!("Pairing rejected with status: {}", msg.status)));
+                return Err(PairingError::Protocol(format!(
+                    "Pairing rejected with status: {}",
+                    msg.status
+                )));
             }
             if msg.secret_ack.is_some() {
                 break;

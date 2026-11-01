@@ -2,21 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppConfig {
     pub last_tv_ip: Option<String>,
     pub tv_name: Option<String>,
     pub paired: bool,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            last_tv_ip: None,
-            tv_name: None,
-            paired: false,
-        }
-    }
 }
 
 pub fn get_config_dir() -> PathBuf {

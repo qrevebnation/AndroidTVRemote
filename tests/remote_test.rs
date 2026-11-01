@@ -1,8 +1,6 @@
 use atv_remote::cert::generate_identity;
 use atv_remote::codec::{decode_frame, encode_frame};
-use atv_remote::proto::remote::{
-    RemoteDirection, RemoteKeyCode, RemoteMessage, RemoteSetActive,
-};
+use atv_remote::proto::remote::{RemoteDirection, RemoteKeyCode, RemoteMessage, RemoteSetActive};
 use atv_remote::remote::{run_remote_session_with_port, Command, ConnectionState};
 use bytes::BytesMut;
 use std::sync::Arc;

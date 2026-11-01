@@ -25,7 +25,13 @@ fn test_calculate_pairing_secret_mismatched_pin_fails() {
     let server_exp = hex::decode("010001").unwrap();
 
     let wrong_pin = "008F1C"; // 00 != D4
-    let result = calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, wrong_pin);
+    let result = calculate_pairing_secret(
+        &client_mod,
+        &client_exp,
+        &server_mod,
+        &server_exp,
+        wrong_pin,
+    );
     assert!(result.is_err(), "mismatched PIN must fail");
 }
 
@@ -36,6 +42,12 @@ fn test_calculate_pairing_secret_invalid_length_or_hex_fails() {
     let server_mod = hex::decode("112233").unwrap();
     let server_exp = hex::decode("010001").unwrap();
 
-    assert!(calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, "123").is_err());
-    assert!(calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, "ZZZZZZ").is_err());
+    assert!(
+        calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, "123")
+            .is_err()
+    );
+    assert!(
+        calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, "ZZZZZZ")
+            .is_err()
+    );
 }

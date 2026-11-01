@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use atv_remote::proto::{polo, remote};
 use prost::Message;
 
@@ -37,6 +39,9 @@ fn test_remote_key_inject_serialization() {
 
     let decoded = remote::RemoteMessage::decode(&buf[..]).expect("decode failed");
     let key_inject = decoded.remote_key_inject.expect("missing key inject");
-    assert_eq!(key_inject.key_code, remote::RemoteKeyCode::KeycodeDpadCenter as i32);
+    assert_eq!(
+        key_inject.key_code,
+        remote::RemoteKeyCode::KeycodeDpadCenter as i32
+    );
     assert_eq!(key_inject.direction, remote::RemoteDirection::Short as i32);
 }

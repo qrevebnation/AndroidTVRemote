@@ -100,6 +100,7 @@ export component AppWindow inherits Window {
                         text <=> root.tv-ip;
                         placeholder-text: "TV IP (e.g. 192.168.1.50)";
                         horizontal-stretch: 1;
+                        accepted => { root.connect_tv(root.tv-ip); }
                     }
 
                     RemoteButton {
@@ -382,6 +383,7 @@ export component AppWindow inherits Window {
                     placeholder-text: "e.g. 4F2A19";
                     horizontal-alignment: center;
                     font-size: 16px;
+                    accepted => { root.submit_pin(root.pairing-pin); }
                 }
 
                 HorizontalLayout {

@@ -2,6 +2,8 @@ use bytes::{Buf, BytesMut};
 use prost::encoding::{decode_varint, encode_varint, encoded_len_varint};
 use prost::{DecodeError, Message};
 
+pub const MAX_FRAME_LEN: usize = 64 * 1024; // 64 KB
+
 /// Encodes a protobuf message with a varint length prefix into the given buffer.
 pub fn encode_frame<M: Message>(msg: &M, buf: &mut BytesMut) -> Result<(), std::io::Error> {
     let len = msg.encoded_len();
@@ -14,6 +16,7 @@ pub fn encode_frame<M: Message>(msg: &M, buf: &mut BytesMut) -> Result<(), std::
 
 /// Decodes a length-delimited protobuf message from the buffer if complete.
 /// If incomplete, returns `Ok(None)` and leaves the buffer intact.
+/// If the length prefix is malformed or exceeds MAX_FRAME_LEN, returns an error.
 pub fn decode_frame<M: Message + Default>(buf: &mut BytesMut) -> Result<Option<M>, DecodeError> {
     if buf.is_empty() {
         return Ok(None);
@@ -23,11 +26,19 @@ pub fn decode_frame<M: Message + Default>(buf: &mut BytesMut) -> Result<Option<M
     let initial_len = peek_slice.len();
     let msg_len = match decode_varint(&mut peek_slice) {
         Ok(len) => len as usize,
-        Err(_) => {
-            // Varint prefix not fully received yet
+        Err(e) => {
+            // A standard 64-bit varint cannot exceed 10 bytes in length.
+            // If the buffer has 10 or more bytes and still cannot decode, it is corrupted.
+            if buf.len() >= 10 {
+                return Err(e);
+            }
             return Ok(None);
         }
     };
+
+    if msg_len > MAX_FRAME_LEN {
+        return Err(DecodeError::new("Frame exceeds maximum allowed length"));
+    }
 
     let varint_len = initial_len - peek_slice.len();
     let total_frame_len = varint_len + msg_len;

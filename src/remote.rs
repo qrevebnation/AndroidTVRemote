@@ -1,16 +1,20 @@
 use bytes::BytesMut;
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
-use rustls::{ClientConfig, Error as RustlsError, SignatureScheme};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use rustls::ClientConfig;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
+use crate::cert::NoVerifyServerCert;
 use crate::codec::{decode_frame, encode_frame};
-pub use crate::proto::remote::{RemoteDirection, RemoteKeyCode};
 use crate::proto::remote::*;
+pub use crate::proto::remote::{RemoteDirection, RemoteKeyCode};
+
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(7);
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -37,54 +41,8 @@ pub enum RemoteError {
     Decode(#[from] prost::DecodeError),
     #[error("Protocol error: {0}")]
     Protocol(String),
-}
-
-#[derive(Debug)]
-struct NoVerifyServerCert;
-
-impl ServerCertVerifier for NoVerifyServerCert {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, RustlsError> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, RustlsError> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ED25519,
-        ]
-    }
+    #[error("Operation timed out")]
+    Timeout,
 }
 
 pub async fn run_remote_session(
@@ -116,11 +74,15 @@ pub async fn run_remote_session_with_port(
 
     let connector = TlsConnector::from(Arc::new(config));
     let addr = format!("{}:{}", tv_ip, port);
-    let tcp = TcpStream::connect(&addr).await?;
+    let tcp = timeout(NETWORK_TIMEOUT, TcpStream::connect(&addr))
+        .await
+        .map_err(|_| RemoteError::Timeout)??;
     let domain = ServerName::try_from("atvremote".to_string())
         .map_err(|_| RemoteError::Protocol("Invalid server name".to_string()))?;
 
-    let mut tls = connector.connect(domain, tcp).await?;
+    let mut tls = timeout(NETWORK_TIMEOUT, connector.connect(domain, tcp))
+        .await
+        .map_err(|_| RemoteError::Timeout)??;
 
     let mut write_buf = BytesMut::new();
     let mut read_buf = BytesMut::new();
@@ -143,9 +105,31 @@ pub async fn run_remote_session_with_port(
     encode_frame(&configure_msg, &mut write_buf)?;
     tls.write_all(&write_buf.split()).await?;
 
-    let _ = status_tx.send(ConnectionState::Connected);
-
+    // 2. Wait for confirmation before claiming Connected
     let mut temp = [0u8; 2048];
+    let mut handshake_confirmed = false;
+    while !handshake_confirmed {
+        let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
+            .await
+            .map_err(|_| RemoteError::Timeout)??;
+        if n == 0 {
+            let _ = status_tx.send(ConnectionState::Disconnected(
+                "Connection closed by TV".to_string(),
+            ));
+            return Err(RemoteError::Protocol(
+                "Connection closed before configuration ack".to_string(),
+            ));
+        }
+        read_buf.extend_from_slice(&temp[..n]);
+        while let Some(msg) = decode_frame::<RemoteMessage>(&mut read_buf)? {
+            if msg.remote_configure.is_some() || msg.remote_set_active.is_some() {
+                handshake_confirmed = true;
+                break;
+            }
+        }
+    }
+
+    let _ = status_tx.send(ConnectionState::Connected);
 
     loop {
         tokio::select! {
@@ -164,15 +148,29 @@ pub async fn run_remote_session_with_port(
 
                 read_buf.extend_from_slice(&temp[..n]);
 
-                while let Some(msg) = decode_frame::<RemoteMessage>(&mut read_buf)? {
-                    // Handle Ping/Pong
-                    if let Some(ping) = msg.remote_ping_request {
-                        let pong = RemoteMessage {
-                            remote_ping_response: Some(RemotePingResponse { val1: ping.val1 }),
-                            ..Default::default()
-                        };
-                        encode_frame(&pong, &mut write_buf)?;
-                        tls.write_all(&write_buf.split()).await?;
+                loop {
+                    match decode_frame::<RemoteMessage>(&mut read_buf) {
+                        Ok(Some(msg)) => {
+                            if let Some(ping) = msg.remote_ping_request {
+                                let pong = RemoteMessage {
+                                    remote_ping_response: Some(RemotePingResponse { val1: ping.val1 }),
+                                    ..Default::default()
+                                };
+                                if let Err(e) = encode_frame(&pong, &mut write_buf) {
+                                    let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
+                                    return Err(RemoteError::Io(e));
+                                }
+                                if let Err(e) = tls.write_all(&write_buf.split()).await {
+                                    let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
+                                    return Err(RemoteError::Io(e));
+                                }
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            let _ = status_tx.send(ConnectionState::Disconnected(format!("Frame decode error: {e}")));
+                            return Err(RemoteError::Decode(e));
+                        }
                     }
                 }
             }
@@ -187,8 +185,14 @@ pub async fn run_remote_session_with_port(
                             }),
                             ..Default::default()
                         };
-                        encode_frame(&key_msg, &mut write_buf)?;
-                        tls.write_all(&write_buf.split()).await?;
+                        if let Err(e) = encode_frame(&key_msg, &mut write_buf) {
+                            let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
+                            return Err(RemoteError::Io(e));
+                        }
+                        if let Err(e) = tls.write_all(&write_buf.split()).await {
+                            let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
+                            return Err(RemoteError::Io(e));
+                        }
                     }
                     Some(Command::LaunchApp(url)) => {
                         let app_msg = RemoteMessage {
@@ -197,8 +201,14 @@ pub async fn run_remote_session_with_port(
                             }),
                             ..Default::default()
                         };
-                        encode_frame(&app_msg, &mut write_buf)?;
-                        tls.write_all(&write_buf.split()).await?;
+                        if let Err(e) = encode_frame(&app_msg, &mut write_buf) {
+                            let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
+                            return Err(RemoteError::Io(e));
+                        }
+                        if let Err(e) = tls.write_all(&write_buf.split()).await {
+                            let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
+                            return Err(RemoteError::Io(e));
+                        }
                     }
                     Some(Command::Disconnect) | None => {
                         let _ = status_tx.send(ConnectionState::Disconnected("Disconnected by user".to_string()));

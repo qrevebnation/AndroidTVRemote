@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use atv_remote::codec::{decode_frame, encode_frame};
 use atv_remote::proto::remote::{RemoteDirection, RemoteKeyCode, RemoteKeyInject, RemoteMessage};
 use bytes::BytesMut;
@@ -75,4 +77,19 @@ fn test_decode_multiple_frames() {
     let dec3: Option<RemoteMessage> = decode_frame(&mut buf).expect("decode 3 failed");
     assert!(dec3.is_none());
     assert!(buf.is_empty());
+}
+
+#[test]
+fn test_malformed_varint_errors() {
+    let mut bad_buf = BytesMut::from(&[0xFF; 12][..]);
+    let res: Result<Option<RemoteMessage>, _> = decode_frame(&mut bad_buf);
+    assert!(res.is_err(), "must return DecodeError on malformed varint");
+}
+
+#[test]
+fn test_oversized_frame_errors() {
+    let mut buf = BytesMut::new();
+    prost::encoding::encode_varint(10 * 1024 * 1024, &mut buf);
+    let res: Result<Option<RemoteMessage>, _> = decode_frame(&mut buf);
+    assert!(res.is_err(), "must reject frames exceeding MAX_FRAME_LEN");
 }
