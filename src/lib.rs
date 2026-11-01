@@ -3,6 +3,7 @@
 pub const APP_NAME: &str = "Google TV Remote";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+pub mod app;
 pub mod cert;
 pub mod codec;
 pub mod config;
