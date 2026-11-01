@@ -9,9 +9,10 @@ description = "High-performance, low-memory cross-platform Google TV remote in p
 tokio = { version = "1.41", features = ["rt", "net", "time", "sync", "macros", "io-util"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pki-types = "1.10"
-rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
+rustls-pemfile = "2.2"
+rcgen = { version = "0.13", features = ["pem", "ring"] }
 rsa = { version = "0.9", features = ["pem"] }
-sha2 = "0.10"
+rand = "0.8"
 hex = "0.4"
 bytes = "1.9"
 prost = "0.13"
@@ -27,6 +28,7 @@ slint-build = "1.9"
 
 [dev-dependencies]
 tokio = { version = "1.41", features = ["full"] }
+tempfile = "3"
 
 [profile.release]
 opt-level = 3
