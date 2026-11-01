@@ -1,0 +1,411 @@
+import { Button, LineEdit } from "std-widgets.slint";
+
+component RemoteButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon: "";
+    in property <color> base-color: #2a2a2e;
+    in property <color> hover-color: #38383e;
+    in property <color> active-color: #4a4a52;
+    in property <color> text-color: #f0f0f0;
+    in property <length> font-size: 14px;
+    callback clicked();
+
+    border-radius: self.height / 2;
+    background: touch.pressed ? active-color : (touch.has-hover ? hover-color : base-color);
+    animate background { duration: 120ms; }
+
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+
+    Text {
+        text: root.text;
+        color: root.text-color;
+        font-size: root.font-size;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component AppWindow inherits Window {
+    title: "Google TV Remote";
+    min-width: 340px;
+    min-height: 620px;
+    preferred-width: 360px;
+    preferred-height: 660px;
+    background: #18181c;
+
+    in-out property <string> tv-ip: "192.168.1.";
+    in-out property <string> connection-status: "Disconnected";
+    in-out property <color> status-color: #ff5252;
+    in-out property <string> active-app: "TV Ready";
+    in-out property <bool> show-pairing-modal: false;
+    in-out property <string> pairing-pin: "";
+
+    callback send_key(string);
+    callback connect_tv(string);
+    callback submit_pin(string);
+    callback cancel_pairing();
+    callback launch_mini_screen();
+
+    forward-focus: key-handler;
+
+    key-handler := FocusScope {
+        key-pressed(event) => {
+            if (root.show-pairing-modal) {
+                return reject;
+            }
+            if (event.text == Key.UpArrow) { root.send_key("DPAD_UP"); return accept; }
+            if (event.text == Key.DownArrow) { root.send_key("DPAD_DOWN"); return accept; }
+            if (event.text == Key.LeftArrow) { root.send_key("DPAD_LEFT"); return accept; }
+            if (event.text == Key.RightArrow) { root.send_key("DPAD_RIGHT"); return accept; }
+            if (event.text == Key.Return || event.text == " ") { root.send_key("DPAD_CENTER"); return accept; }
+            if (event.text == Key.Escape || event.text == Key.Backspace) { root.send_key("BACK"); return accept; }
+            if (event.text == "h" || event.text == "H" || event.text == Key.Home) { root.send_key("HOME"); return accept; }
+            if (event.text == "+" || event.text == "=" || event.text == "]") { root.send_key("VOLUME_UP"); return accept; }
+            if (event.text == "-" || event.text == "[") { root.send_key("VOLUME_DOWN"); return accept; }
+            if (event.text == "m" || event.text == "M") { root.send_key("MUTE"); return accept; }
+            if (event.text == "p" || event.text == "P") { root.send_key("POWER"); return accept; }
+            if (event.text == "k" || event.text == "K") { root.send_key("PLAY_PAUSE"); return accept; }
+            reject
+        }
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 14px;
+            alignment: start;
+
+            // Top Status Bar & IP Input
+            Rectangle {
+                height: 52px;
+                background: #222228;
+                border-radius: 12px;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 8px;
+                    alignment: center;
+
+                    // Status Indicator Dot
+                    Rectangle {
+                        width: 10px;
+                        height: 10px;
+                        border-radius: 5px;
+                        background: root.status-color;
+                    }
+
+                    ip-input := LineEdit {
+                        text <=> root.tv-ip;
+                        placeholder-text: "TV IP (e.g. 192.168.1.50)";
+                        horizontal-stretch: 1;
+                    }
+
+                    RemoteButton {
+                        width: 72px;
+                        height: 32px;
+                        text: "Connect";
+                        base-color: #3d5afe;
+                        hover-color: #536dfe;
+                        active-color: #304ffe;
+                        clicked => {
+                            root.connect_tv(root.tv-ip);
+                        }
+                    }
+                }
+            }
+
+            // HUD Info Row (Active App & Status)
+            Rectangle {
+                height: 40px;
+                background: #1e1e24;
+                border-radius: 8px;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    alignment: space-between;
+
+                    Text {
+                        text: root.connection-status;
+                        color: #a0a0ab;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+
+                    RemoteButton {
+                        width: 110px;
+                        height: 26px;
+                        text: "📺 Mini Screen";
+                        base-color: #2b2b36;
+                        hover-color: #393946;
+                        text-color: #82b1ff;
+                        font-size: 11px;
+                        clicked => {
+                            root.launch_mini_screen();
+                        }
+                    }
+                }
+            }
+
+            // Top Utility Buttons (Power & Settings)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                RemoteButton {
+                    width: 52px;
+                    height: 52px;
+                    text: "⏻";
+                    font-size: 18px;
+                    base-color: #3a1a1e;
+                    hover-color: #4a2024;
+                    active-color: #5c262c;
+                    text-color: #ff5252;
+                    clicked => { root.send_key("POWER"); }
+                }
+
+                RemoteButton {
+                    width: 52px;
+                    height: 52px;
+                    text: "⚙";
+                    font-size: 18px;
+                    clicked => { root.send_key("SETTINGS"); }
+                }
+
+                RemoteButton {
+                    width: 52px;
+                    height: 52px;
+                    text: "☰";
+                    font-size: 18px;
+                    clicked => { root.send_key("MENU"); }
+                }
+            }
+
+            // D-Pad Controller Wheel
+            Rectangle {
+                height: 220px;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 210px;
+                        height: 210px;
+                        border-radius: 105px;
+                        background: #25252b;
+                        border-width: 2px;
+                        border-color: #32323a;
+
+                        // UP
+                        RemoteButton {
+                            x: 75px;
+                            y: 8px;
+                            width: 60px;
+                            height: 48px;
+                            text: "▲";
+                            font-size: 16px;
+                            base-color: transparent;
+                            hover-color: #34343d;
+                            active-color: #444450;
+                            clicked => { root.send_key("DPAD_UP"); }
+                        }
+
+                        // DOWN
+                        RemoteButton {
+                            x: 75px;
+                            y: 154px;
+                            width: 60px;
+                            height: 48px;
+                            text: "▼";
+                            font-size: 16px;
+                            base-color: transparent;
+                            hover-color: #34343d;
+                            active-color: #444450;
+                            clicked => { root.send_key("DPAD_DOWN"); }
+                        }
+
+                        // LEFT
+                        RemoteButton {
+                            x: 8px;
+                            y: 75px;
+                            width: 48px;
+                            height: 60px;
+                            text: "◀";
+                            font-size: 16px;
+                            base-color: transparent;
+                            hover-color: #34343d;
+                            active-color: #444450;
+                            clicked => { root.send_key("DPAD_LEFT"); }
+                        }
+
+                        // RIGHT
+                        RemoteButton {
+                            x: 154px;
+                            y: 75px;
+                            width: 48px;
+                            height: 60px;
+                            text: "▶";
+                            font-size: 16px;
+                            base-color: transparent;
+                            hover-color: #34343d;
+                            active-color: #444450;
+                            clicked => { root.send_key("DPAD_RIGHT"); }
+                        }
+
+                        // CENTER (OK)
+                        RemoteButton {
+                            x: 65px;
+                            y: 65px;
+                            width: 80px;
+                            height: 80px;
+                            text: "OK";
+                            font-size: 16px;
+                            base-color: #383842;
+                            hover-color: #484854;
+                            active-color: #5c5c6b;
+                            clicked => { root.send_key("DPAD_CENTER"); }
+                        }
+                    }
+                }
+            }
+
+            // Navigation Row (Back, Home, Play/Pause)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                RemoteButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "←";
+                    font-size: 20px;
+                    clicked => { root.send_key("BACK"); }
+                }
+
+                RemoteButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "⌂";
+                    font-size: 20px;
+                    clicked => { root.send_key("HOME"); }
+                }
+
+                RemoteButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "⏯";
+                    font-size: 18px;
+                    clicked => { root.send_key("PLAY_PAUSE"); }
+                }
+            }
+
+            // Volume Controls Row
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                RemoteButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "–";
+                    font-size: 22px;
+                    clicked => { root.send_key("VOLUME_DOWN"); }
+                }
+
+                RemoteButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "🔇";
+                    font-size: 18px;
+                    clicked => { root.send_key("MUTE"); }
+                }
+
+                RemoteButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "+";
+                    font-size: 22px;
+                    clicked => { root.send_key("VOLUME_UP"); }
+                }
+            }
+
+            // Shortcut Hint Footnote
+            Text {
+                text: "Shortcuts: Arrows (D-Pad), Enter/Space (OK), Esc (Back), H (Home), +/- (Vol)";
+                color: #5c5c68;
+                font-size: 10px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // Modal Pairing Dialog
+    if root.show-pairing-modal: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #000000d0;
+
+        Rectangle {
+            width: 280px;
+            height: 200px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            background: #25252c;
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: #3d5afe;
+
+            VerticalLayout {
+                padding: 16px;
+                spacing: 12px;
+                alignment: center;
+
+                Text {
+                    text: "Pairing Required";
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: #ffffff;
+                    horizontal-alignment: center;
+                }
+
+                Text {
+                    text: "Enter 6-character PIN shown on your TV:";
+                    font-size: 12px;
+                    color: #b0b0bb;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                pin-field := LineEdit {
+                    text <=> root.pairing-pin;
+                    placeholder-text: "e.g. 4F2A19";
+                    horizontal-alignment: center;
+                    font-size: 16px;
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+                    alignment: center;
+
+                    RemoteButton {
+                        width: 80px;
+                        height: 36px;
+                        text: "Cancel";
+                        base-color: #383842;
+                        clicked => { root.cancel_pairing(); }
+                    }
+
+                    RemoteButton {
+                        width: 80px;
+                        height: 36px;
+                        text: "Pair";
+                        base-color: #3d5afe;
+                        hover-color: #536dfe;
+                        clicked => { root.submit_pin(root.pairing-pin); }
+                    }
+                }
+            }
+        }
+    }
+}
