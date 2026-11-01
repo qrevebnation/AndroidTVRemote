@@ -1,8 +1,9 @@
-use atv_remote::app::{init_state, launch_mini_screen, map_key_string};
+use atv_remote::app::{init_state, launch_mini_screen, map_key_string, SharedState};
 use atv_remote::pairing::start_pairing;
 use atv_remote::remote::{run_remote_session, Command as RemoteCommand, ConnectionState};
 use atv_remote::ui::AppWindow;
-use slint::ComponentHandle;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use slint::{ComponentHandle, Weak};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -46,8 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             // Update UI status to Connecting
                             let _ = weak.upgrade_in_event_loop(|w| {
                                 w.set_connection_status("Connecting...".into());
-                                w.set_status_color(slint::Color::from_rgb_u8(255, 179, 0));
-                                // Amber
+                                w.set_status_color(slint::Color::from_rgb_u8(255, 179, 0)); // Amber
                             });
 
                             let (cert, key, is_paired) = {
@@ -58,7 +58,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
                             let (status_tx, mut status_rx) = mpsc::unbounded_channel();
 
-                            // Attempt direct remote session if previously paired
                             if is_paired {
                                 {
                                     let mut g = state.lock().await;
@@ -68,131 +67,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let weak_stat = weak.clone();
                                 tokio::spawn(async move {
                                     while let Some(stat) = status_rx.recv().await {
-                                        let _ =
-                                            weak_stat.upgrade_in_event_loop(move |w| match stat {
-                                                ConnectionState::Connecting => {
-                                                    w.set_connection_status("Connecting...".into());
-                                                    w.set_status_color(slint::Color::from_rgb_u8(
-                                                        255, 179, 0,
-                                                    ));
-                                                }
-                                                ConnectionState::Connected => {
-                                                    w.set_connection_status("Connected".into());
-                                                    w.set_status_color(slint::Color::from_rgb_u8(
-                                                        76, 175, 80,
-                                                    )); // Green
-                                                }
-                                                ConnectionState::Disconnected(reason) => {
-                                                    w.set_connection_status(
-                                                        format!("Disconnected: {reason}").into(),
-                                                    );
-                                                    w.set_status_color(slint::Color::from_rgb_u8(
-                                                        244, 67, 54,
-                                                    )); // Red
-                                                }
-                                                ConnectionState::ActiveApp(app) => {
-                                                    w.set_active_app(app.into());
-                                                }
-                                            });
+                                        let _ = weak_stat.upgrade_in_event_loop(move |w| match stat {
+                                            ConnectionState::Connecting => {
+                                                w.set_connection_status("Connecting...".into());
+                                                w.set_status_color(slint::Color::from_rgb_u8(255, 179, 0));
+                                            }
+                                            ConnectionState::Connected => {
+                                                w.set_connection_status("Connected".into());
+                                                w.set_status_color(slint::Color::from_rgb_u8(76, 175, 80)); // Green
+                                            }
+                                            ConnectionState::Disconnected(reason) => {
+                                                w.set_connection_status(format!("Disconnected: {reason}").into());
+                                                w.set_status_color(slint::Color::from_rgb_u8(244, 67, 54)); // Red
+                                            }
+                                            ConnectionState::ActiveApp(app) => {
+                                                w.set_active_app(app.into());
+                                            }
+                                        });
                                     }
                                 });
 
-                                if let Err(e) = run_remote_session(
+                                let session_res = run_remote_session(
                                     &ip,
                                     cert.clone(),
                                     key.clone_key(),
                                     cmd_rx,
                                     status_tx,
                                 )
-                                .await
-                                {
-                                    eprintln!("Session error: {e}");
-                                }
-                            } else {
-                                // Initiate Pairing flow
-                                let (pin_tx, pin_rx) = oneshot::channel();
-                                {
-                                    let mut g = state.lock().await;
-                                    g.pin_tx = Some(pin_tx);
-                                }
+                                .await;
 
-                                let _ = weak.upgrade_in_event_loop(|w| {
-                                    w.set_connection_status("Enter PIN on screen".into());
-                                    w.set_status_color(slint::Color::from_rgb_u8(33, 150, 243)); // Blue
-                                    w.set_show_pairing_modal(true);
-                                });
-
-                                match start_pairing(&ip, &cert, &key, pin_rx).await {
-                                    Ok(()) => {
-                                        let _ = weak.upgrade_in_event_loop(|w| {
-                                            w.set_show_pairing_modal(false);
-                                            w.set_connection_status("Paired! Connecting...".into());
-                                        });
-
-                                        // Save paired status
+                                if let Err(e) = session_res {
+                                    eprintln!("Session error on 6466: {e}");
+                                    let err_str = format!("{e}");
+                                    // If TV unpairs or rejects certificate, automatically fallback to pairing flow
+                                    if err_str.contains("CertificateUnknown") || err_str.contains("certificate unknown") {
+                                        eprintln!("Certificate not recognized by TV. Initiating pairing...");
                                         {
                                             let mut g = state.lock().await;
-                                            g.config.paired = true;
-                                            g.config.last_tv_ip = Some(ip.clone());
+                                            g.config.paired = false;
                                             let _ = g.config.save();
                                         }
-
-                                        // Connect to remote service after pairing
-                                        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-                                        let (status_tx, mut status_rx) = mpsc::unbounded_channel();
-                                        {
-                                            let mut g = state.lock().await;
-                                            g.cmd_tx = Some(cmd_tx);
-                                        }
-
-                                        let weak_stat = weak.clone();
-                                        tokio::spawn(async move {
-                                            while let Some(stat) = status_rx.recv().await {
-                                                let _ = weak_stat.upgrade_in_event_loop(move |w| {
-                                                    match stat {
-                                                        ConnectionState::Connected => {
-                                                            w.set_connection_status(
-                                                                "Connected".into(),
-                                                            );
-                                                            w.set_status_color(
-                                                                slint::Color::from_rgb_u8(
-                                                                    76, 175, 80,
-                                                                ),
-                                                            );
-                                                        }
-                                                        ConnectionState::Disconnected(reason) => {
-                                                            w.set_connection_status(
-                                                                format!("Disconnected: {reason}")
-                                                                    .into(),
-                                                            );
-                                                            w.set_status_color(
-                                                                slint::Color::from_rgb_u8(
-                                                                    244, 67, 54,
-                                                                ),
-                                                            );
-                                                        }
-                                                        _ => {}
-                                                    }
-                                                });
-                                            }
-                                        });
-
-                                        let _ =
-                                            run_remote_session(&ip, cert, key, cmd_rx, status_tx)
-                                                .await;
-                                    }
-                                    Err(e) => {
-                                        let _ = weak.upgrade_in_event_loop(move |w| {
-                                            w.set_show_pairing_modal(false);
-                                            w.set_connection_status(
-                                                format!("Pairing failed: {e}").into(),
-                                            );
-                                            w.set_status_color(slint::Color::from_rgb_u8(
-                                                244, 67, 54,
-                                            ));
-                                        });
+                                        execute_pairing(&ip, cert, key, weak, state).await;
                                     }
                                 }
+                            } else {
+                                execute_pairing(&ip, cert, key, weak, state).await;
                             }
                         }));
                     }
@@ -259,6 +178,77 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     app_window.run()?;
     Ok(())
+}
+
+async fn execute_pairing(
+    ip: &str,
+    cert: CertificateDer<'static>,
+    key: PrivateKeyDer<'static>,
+    weak: Weak<AppWindow>,
+    state: SharedState,
+) {
+    let (pin_tx, pin_rx) = oneshot::channel();
+    {
+        let mut g = state.lock().await;
+        g.pin_tx = Some(pin_tx);
+    }
+
+    let _ = weak.upgrade_in_event_loop(|w| {
+        w.set_connection_status("Connecting for pairing...".into());
+        w.set_status_color(slint::Color::from_rgb_u8(33, 150, 243)); // Blue
+        w.set_show_pairing_modal(true);
+    });
+
+    match start_pairing(ip, &cert, &key, pin_rx).await {
+        Ok(()) => {
+            let _ = weak.upgrade_in_event_loop(|w| {
+                w.set_show_pairing_modal(false);
+                w.set_connection_status("Paired! Connecting...".into());
+            });
+
+            // Save paired status
+            {
+                let mut g = state.lock().await;
+                g.config.paired = true;
+                g.config.last_tv_ip = Some(ip.to_string());
+                let _ = g.config.save();
+            }
+
+            // Connect to remote service after pairing
+            let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+            let (status_tx, mut status_rx) = mpsc::unbounded_channel();
+            {
+                let mut g = state.lock().await;
+                g.cmd_tx = Some(cmd_tx);
+            }
+
+            let weak_stat = weak.clone();
+            tokio::spawn(async move {
+                while let Some(stat) = status_rx.recv().await {
+                    let _ = weak_stat.upgrade_in_event_loop(move |w| match stat {
+                        ConnectionState::Connected => {
+                            w.set_connection_status("Connected".into());
+                            w.set_status_color(slint::Color::from_rgb_u8(76, 175, 80));
+                        }
+                        ConnectionState::Disconnected(reason) => {
+                            w.set_connection_status(format!("Disconnected: {reason}").into());
+                            w.set_status_color(slint::Color::from_rgb_u8(244, 67, 54));
+                        }
+                        _ => {}
+                    });
+                }
+            });
+
+            let _ = run_remote_session(ip, cert, key, cmd_rx, status_tx).await;
+        }
+        Err(e) => {
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                w.set_show_pairing_modal(false);
+                w.set_connection_status(format!("Pairing failed: {e}").into());
+                w.set_status_color(slint::Color::from_rgb_u8(244, 67, 54));
+            });
+        }
+    }
 }
 
 enum Action {
