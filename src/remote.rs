@@ -52,7 +52,7 @@ pub async fn run_remote_session(
     cmd_rx: mpsc::UnboundedReceiver<Command>,
     status_tx: mpsc::UnboundedSender<ConnectionState>,
 ) -> Result<(), RemoteError> {
-    run_remote_session_with_port(tv_ip, 6467, cert, key, cmd_rx, status_tx).await
+    run_remote_session_with_port(tv_ip, 6466, cert, key, cmd_rx, status_tx).await
 }
 
 pub async fn run_remote_session_with_port(

@@ -100,7 +100,7 @@ async fn test_mock_tv_end_to_end_pairing_and_remote_control() {
 
         // Send PairingRequestAck
         let mut resp = OuterMessage {
-            protocol_version: 1,
+            protocol_version: 2,
             status: outer_message::Status::Ok as i32,
             pairing_request_ack: Some(PairingRequestAck {
                 server_name: Some("Mock Android TV".to_string()),
@@ -122,7 +122,7 @@ async fn test_mock_tv_end_to_end_pairing_and_remote_control() {
 
         // Send Configuration
         resp = OuterMessage {
-            protocol_version: 1,
+            protocol_version: 2,
             status: outer_message::Status::Ok as i32,
             configuration: Some(Configuration {
                 encoding: options::Encoding {
@@ -177,7 +177,7 @@ async fn test_mock_tv_end_to_end_pairing_and_remote_control() {
 
         // Send SecretAck
         resp = OuterMessage {
-            protocol_version: 1,
+            protocol_version: 2,
             status: outer_message::Status::Ok as i32,
             secret_ack: Some(SecretAck {
                 secret: expected_secret.to_vec(),

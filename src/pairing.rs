@@ -16,7 +16,8 @@ use crate::cert::NoVerifyServerCert;
 use crate::codec::{decode_frame, encode_frame};
 use crate::proto::polo::*;
 
-const NETWORK_TIMEOUT: Duration = Duration::from_secs(7);
+const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
+const USER_PIN_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum PairingError {
@@ -89,7 +90,8 @@ pub async fn start_pairing(
     client_key: &PrivateKeyDer<'static>,
     pin_rx: tokio::sync::oneshot::Receiver<String>,
 ) -> Result<(), PairingError> {
-    start_pairing_with_port(tv_ip, 6466, client_cert, client_key, pin_rx).await
+    // Official Android TV Remote Pairing port is 6467
+    start_pairing_with_port(tv_ip, 6467, client_cert, client_key, pin_rx).await
 }
 
 pub async fn start_pairing_with_port(
@@ -132,9 +134,9 @@ pub async fn start_pairing_with_port(
     let mut write_buf = BytesMut::new();
     let mut read_buf = BytesMut::new();
 
-    // 1. Send PairingRequest
+    // 1. Send PairingRequest (Polo protocol_version = 2)
     let mut outer = OuterMessage {
-        protocol_version: 1,
+        protocol_version: 2,
         status: outer_message::Status::Ok as i32,
         pairing_request: Some(PairingRequest {
             service_name: "atvremote".to_string(),
@@ -166,7 +168,7 @@ pub async fn start_pairing_with_port(
 
     // 3. Send Options
     outer = OuterMessage {
-        protocol_version: 1,
+        protocol_version: 2,
         status: outer_message::Status::Ok as i32,
         options: Some(Options {
             input_encodings: vec![options::Encoding {
@@ -181,7 +183,7 @@ pub async fn start_pairing_with_port(
     encode_frame(&outer, &mut write_buf)?;
     tls.write_all(&write_buf.split()).await?;
 
-    // 4. Read Configuration
+    // 4. Read Configuration from TV
     loop {
         let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
             .await
@@ -199,9 +201,9 @@ pub async fn start_pairing_with_port(
         }
     }
 
-    // 5. Send ConfigurationAck
+    // 5. Send ConfigurationAck (TV displays the PIN on screen right after this)
     outer = OuterMessage {
-        protocol_version: 1,
+        protocol_version: 2,
         status: outer_message::Status::Ok as i32,
         configuration_ack: Some(ConfigurationAck {}),
         ..Default::default()
@@ -209,14 +211,18 @@ pub async fn start_pairing_with_port(
     encode_frame(&outer, &mut write_buf)?;
     tls.write_all(&write_buf.split()).await?;
 
-    // 6. Wait for PIN from user
-    let pin = pin_rx.await.map_err(|_| PairingError::ChannelClosed)?;
+    // 6. Wait for PIN from user (up to 60 seconds)
+    let pin = timeout(USER_PIN_TIMEOUT, pin_rx)
+        .await
+        .map_err(|_| PairingError::Timeout)?
+        .map_err(|_| PairingError::ChannelClosed)?;
+
     let secret =
         calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, &pin)?;
 
     // 7. Send Secret
     outer = OuterMessage {
-        protocol_version: 1,
+        protocol_version: 2,
         status: outer_message::Status::Ok as i32,
         secret: Some(Secret {
             secret: secret.to_vec(),
