@@ -1,18 +1,18 @@
 import { Button, LineEdit } from "std-widgets.slint";
 
-component RemoteButton inherits Rectangle {
+component CatppuccinButton inherits Rectangle {
     in property <string> text;
     in property <string> icon: "";
-    in property <color> base-color: #262630;
-    in property <color> hover-color: #353544;
-    in property <color> active-color: #48485c;
-    in property <color> text-color: #f2f2f8;
+    in property <color> base-color: #313244;       // Surface0
+    in property <color> hover-color: #45475a;      // Surface1
+    in property <color> active-color: #585b70;     // Surface2
+    in property <color> text-color: #cdd6f4;       // Text
     in property <length> font-size: 15px;
     callback clicked();
 
     border-radius: self.height / 2;
     background: touch.pressed ? active-color : (touch.has-hover ? hover-color : base-color);
-    animate background { duration: 100ms; }
+    animate background { duration: 90ms; }
 
     touch := TouchArea {
         clicked => { root.clicked(); }
@@ -32,13 +32,13 @@ export component AppWindow inherits Window {
     title: "Google TV Remote";
     min-width: 360px;
     min-height: 640px;
-    preferred-width: 390px;
-    preferred-height: 710px;
-    background: #121216;
+    preferred-width: 400px;
+    preferred-height: 720px;
+    background: #1e1e2e; // Catppuccin Mocha Base
 
     in-out property <string> tv-ip: "192.168.1.12";
     in-out property <string> connection-status: "Disconnected";
-    in-out property <color> status-color: #ff5252;
+    in-out property <color> status-color: #f38ba8; // Catppuccin Red
     in-out property <string> active-app: "";
     in-out property <bool> show-pairing-modal: false;
     in-out property <string> pairing-pin: "";
@@ -71,7 +71,7 @@ export component AppWindow inherits Window {
             reject
         }
 
-        // Center content even if user maximizes window to widescreen
+        // Center content cleanly on screen even when window is maximized
         HorizontalLayout {
             alignment: center;
 
@@ -82,54 +82,63 @@ export component AppWindow inherits Window {
                 spacing: 12px;
                 alignment: start;
 
-                // 1. Unified IP Connection Bar
-                Rectangle {
-                    height: 52px;
-                    background: #1c1c24;
-                    border-radius: 12px;
-                    border-width: 1px;
-                    border-color: #2e2e3e;
+                // 1. Pixel-Perfect IP Connection Row
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: center;
 
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 8px;
-                        spacing: 8px;
-                        alignment: center;
+                    // IP Input Container with vertically centered status dot
+                    Rectangle {
+                        horizontal-stretch: 1;
+                        height: 38px;
+                        background: #11111b; // Crust
+                        border-radius: 8px;
+                        border-width: 1px;
+                        border-color: #313244; // Surface0
 
-                        Rectangle {
-                            width: 10px;
-                            height: 10px;
-                            border-radius: 5px;
-                            background: root.status-color;
-                        }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 8px;
+                            spacing: 8px;
+                            alignment: center;
 
-                        ip-input := LineEdit {
-                            text <=> root.tv-ip;
-                            placeholder-text: "192.168.1.12";
-                            horizontal-stretch: 1;
-                            font-size: 13px;
-                            accepted => { root.connect_tv(root.tv-ip); }
-                        }
-
-                        Rectangle {
-                            width: 78px;
-                            height: 36px;
-                            border-radius: 8px;
-                            background: btn-connect.pressed ? #283593 : (btn-connect.has-hover ? #3949ab : #304ffe);
-                            animate background { duration: 100ms; }
-
-                            btn-connect := TouchArea {
-                                clicked => { root.connect_tv(root.tv-ip); }
+                            // Status Indicator Dot (Vertically Centered)
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: root.status-color;
                             }
 
-                            Text {
-                                text: "Connect";
-                                color: #ffffff;
+                            ip-input := LineEdit {
+                                text <=> root.tv-ip;
+                                placeholder-text: "192.168.1.12";
+                                horizontal-stretch: 1;
                                 font-size: 13px;
-                                font-weight: 700;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
+                                accepted => { root.connect_tv(root.tv-ip); }
                             }
+                        }
+                    }
+
+                    // Matching 38px Height Mauve Connect Button
+                    Rectangle {
+                        width: 84px;
+                        height: 38px;
+                        border-radius: 8px;
+                        background: btn-connect.pressed ? #b4befe : (btn-connect.has-hover ? #d5b8ff : #cba6f7); // Mauve
+                        animate background { duration: 90ms; }
+
+                        btn-connect := TouchArea {
+                            clicked => { root.connect_tv(root.tv-ip); }
+                        }
+
+                        Text {
+                            text: "Connect";
+                            color: #11111b; // Crust (contrast > 8:1)
+                            font-size: 13px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
                         }
                     }
                 }
@@ -137,10 +146,10 @@ export component AppWindow inherits Window {
                 // 2. HUD Status & Mini Screen Row
                 Rectangle {
                     height: 44px;
-                    background: #181822;
+                    background: #181825; // Mantle
                     border-radius: 10px;
                     border-width: 1px;
-                    border-color: #272738;
+                    border-color: #313244; // Surface0
 
                     HorizontalLayout {
                         padding-left: 12px;
@@ -163,20 +172,21 @@ export component AppWindow inherits Window {
 
                             if root.active-app != "": Text {
                                 text: "App: " + root.active-app;
-                                color: #88889e;
+                                color: #a6adc8; // Subtext0
                                 font-size: 10px;
                                 overflow: elide;
                             }
                         }
 
+                        // Lavender Mini Screen Button
                         Rectangle {
                             width: 114px;
-                            height: 32px;
+                            height: 30px;
                             border-radius: 8px;
-                            background: btn-mini.pressed ? #1a237e : (btn-mini.has-hover ? #283593 : #212132);
+                            background: btn-mini.pressed ? #313244 : (btn-mini.has-hover ? #252536 : #181825);
                             border-width: 1px;
-                            border-color: #3949ab;
-                            animate background { duration: 100ms; }
+                            border-color: #b4befe; // Lavender
+                            animate background { duration: 90ms; }
 
                             btn-mini := TouchArea {
                                 clicked => { root.launch_mini_screen(); }
@@ -184,7 +194,7 @@ export component AppWindow inherits Window {
 
                             Text {
                                 text: "📺 Mini Screen";
-                                color: #82b1ff;
+                                color: #b4befe; // Lavender
                                 font-size: 12px;
                                 font-weight: 600;
                                 horizontal-alignment: center;
@@ -199,31 +209,36 @@ export component AppWindow inherits Window {
                     spacing: 16px;
                     alignment: center;
 
-                    RemoteButton {
+                    // Power Button (Catppuccin Red)
+                    CatppuccinButton {
                         width: 54px;
                         height: 54px;
                         text: "⏻";
                         font-size: 20px;
-                        base-color: #3a181e;
-                        hover-color: #4a1f26;
-                        active-color: #5c242e;
-                        text-color: #ff5252;
+                        base-color: #312028;
+                        hover-color: #452834;
+                        active-color: #5c3244;
+                        text-color: #f38ba8; // Red
                         clicked => { root.send_key("POWER"); }
                     }
 
-                    RemoteButton {
+                    // Settings Button (Catppuccin Peach)
+                    CatppuccinButton {
                         width: 54px;
                         height: 54px;
                         text: "⚙";
                         font-size: 20px;
+                        text-color: #fab387; // Peach
                         clicked => { root.send_key("SETTINGS"); }
                     }
 
-                    RemoteButton {
+                    // Menu Button (Catppuccin Sky)
+                    CatppuccinButton {
                         width: 54px;
                         height: 54px;
                         text: "☰";
                         font-size: 20px;
+                        text-color: #89dceb; // Sky
                         clicked => { root.send_key("MENU"); }
                     }
                 }
@@ -237,12 +252,12 @@ export component AppWindow inherits Window {
                             width: 216px;
                             height: 216px;
                             border-radius: 108px;
-                            background: #1e1e28;
+                            background: #181825; // Mantle
                             border-width: 2px;
-                            border-color: #2d2d3c;
+                            border-color: #313244; // Surface0
 
                             // UP
-                            RemoteButton {
+                            CatppuccinButton {
                                 x: 78px;
                                 y: 8px;
                                 width: 60px;
@@ -250,13 +265,14 @@ export component AppWindow inherits Window {
                                 text: "▲";
                                 font-size: 16px;
                                 base-color: transparent;
-                                hover-color: #303040;
-                                active-color: #404054;
+                                hover-color: #313244;
+                                active-color: #45475a;
+                                text-color: #cdd6f4;
                                 clicked => { root.send_key("DPAD_UP"); }
                             }
 
                             // DOWN
-                            RemoteButton {
+                            CatppuccinButton {
                                 x: 78px;
                                 y: 158px;
                                 width: 60px;
@@ -264,13 +280,14 @@ export component AppWindow inherits Window {
                                 text: "▼";
                                 font-size: 16px;
                                 base-color: transparent;
-                                hover-color: #303040;
-                                active-color: #404054;
+                                hover-color: #313244;
+                                active-color: #45475a;
+                                text-color: #cdd6f4;
                                 clicked => { root.send_key("DPAD_DOWN"); }
                             }
 
                             // LEFT
-                            RemoteButton {
+                            CatppuccinButton {
                                 x: 8px;
                                 y: 78px;
                                 width: 50px;
@@ -278,13 +295,14 @@ export component AppWindow inherits Window {
                                 text: "◀";
                                 font-size: 16px;
                                 base-color: transparent;
-                                hover-color: #303040;
-                                active-color: #404054;
+                                hover-color: #313244;
+                                active-color: #45475a;
+                                text-color: #cdd6f4;
                                 clicked => { root.send_key("DPAD_LEFT"); }
                             }
 
                             // RIGHT
-                            RemoteButton {
+                            CatppuccinButton {
                                 x: 158px;
                                 y: 78px;
                                 width: 50px;
@@ -292,22 +310,24 @@ export component AppWindow inherits Window {
                                 text: "▶";
                                 font-size: 16px;
                                 base-color: transparent;
-                                hover-color: #303040;
-                                active-color: #404054;
+                                hover-color: #313244;
+                                active-color: #45475a;
+                                text-color: #cdd6f4;
                                 clicked => { root.send_key("DPAD_RIGHT"); }
                             }
 
                             // CENTER (OK)
-                            RemoteButton {
+                            CatppuccinButton {
                                 x: 68px;
                                 y: 68px;
                                 width: 80px;
                                 height: 80px;
                                 text: "OK";
-                                font-size: 16px;
-                                base-color: #2e2e3c;
-                                hover-color: #3e3e50;
-                                active-color: #505068;
+                                font-size: 17px;
+                                base-color: #313244;
+                                hover-color: #45475a;
+                                active-color: #585b70;
+                                text-color: #cba6f7; // Mauve
                                 clicked => { root.send_key("DPAD_CENTER"); }
                             }
                         }
@@ -319,7 +339,7 @@ export component AppWindow inherits Window {
                     spacing: 16px;
                     alignment: center;
 
-                    RemoteButton {
+                    CatppuccinButton {
                         width: 58px;
                         height: 52px;
                         text: "←";
@@ -327,19 +347,21 @@ export component AppWindow inherits Window {
                         clicked => { root.send_key("BACK"); }
                     }
 
-                    RemoteButton {
+                    CatppuccinButton {
                         width: 58px;
                         height: 52px;
                         text: "⌂";
                         font-size: 22px;
+                        text-color: #89b4fa; // Blue
                         clicked => { root.send_key("HOME"); }
                     }
 
-                    RemoteButton {
+                    CatppuccinButton {
                         width: 58px;
                         height: 52px;
                         text: "⏯";
                         font-size: 18px;
+                        text-color: #a6e3a1; // Green
                         clicked => { root.send_key("PLAY_PAUSE"); }
                     }
                 }
@@ -349,7 +371,7 @@ export component AppWindow inherits Window {
                     spacing: 16px;
                     alignment: center;
 
-                    RemoteButton {
+                    CatppuccinButton {
                         width: 58px;
                         height: 52px;
                         text: "–";
@@ -357,15 +379,16 @@ export component AppWindow inherits Window {
                         clicked => { root.send_key("VOLUME_DOWN"); }
                     }
 
-                    RemoteButton {
+                    CatppuccinButton {
                         width: 58px;
                         height: 52px;
                         text: "🔇";
                         font-size: 18px;
+                        text-color: #f38ba8; // Red
                         clicked => { root.send_key("MUTE"); }
                     }
 
-                    RemoteButton {
+                    CatppuccinButton {
                         width: 58px;
                         height: 52px;
                         text: "+";
@@ -374,13 +397,13 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                // 7. Clean Keyboard Shortcuts Footnote Card
+                // 7. Clean Keyboard Shortcuts Footnote
                 Rectangle {
                     height: 28px;
-                    background: #161620;
+                    background: #11111b; // Crust
                     border-radius: 8px;
                     border-width: 1px;
-                    border-color: #242432;
+                    border-color: #313244; // Surface0
 
                     HorizontalLayout {
                         padding-left: 10px;
@@ -389,7 +412,7 @@ export component AppWindow inherits Window {
 
                         Text {
                             text: "⌨ Shortcuts: Arrows • Enter/Space • Esc • H • +/-";
-                            color: #77778c;
+                            color: #a6adc8; // Subtext0
                             font-size: 10px;
                             font-weight: 500;
                             vertical-alignment: center;
@@ -405,17 +428,17 @@ export component AppWindow inherits Window {
     if root.show-pairing-modal: Rectangle {
         width: 100%;
         height: 100%;
-        background: #000000d0;
+        background: #11111be0; // Crust overlay
 
         Rectangle {
             width: 300px;
             height: 210px;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            background: #202028;
+            background: #181825; // Mantle
             border-radius: 16px;
             border-width: 1px;
-            border-color: #3d5afe;
+            border-color: #cba6f7; // Mauve
 
             VerticalLayout {
                 padding: 18px;
@@ -426,14 +449,14 @@ export component AppWindow inherits Window {
                     text: "Pairing Required";
                     font-size: 16px;
                     font-weight: 700;
-                    color: #ffffff;
+                    color: #cdd6f4;
                     horizontal-alignment: center;
                 }
 
                 Text {
                     text: "Enter 6-character PIN shown on your TV:";
                     font-size: 12px;
-                    color: #b0b0bb;
+                    color: #a6adc8;
                     horizontal-alignment: center;
                     wrap: word-wrap;
                 }
@@ -450,21 +473,34 @@ export component AppWindow inherits Window {
                     spacing: 12px;
                     alignment: center;
 
-                    RemoteButton {
+                    CatppuccinButton {
                         width: 86px;
                         height: 38px;
                         text: "Cancel";
-                        base-color: #353540;
+                        base-color: #313244;
                         clicked => { root.cancel_pairing(); }
                     }
 
-                    RemoteButton {
+                    // Mauve Pair Button
+                    Rectangle {
                         width: 86px;
                         height: 38px;
-                        text: "Pair";
-                        base-color: #3d5afe;
-                        hover-color: #536dfe;
-                        clicked => { root.submit_pin(root.pairing-pin); }
+                        border-radius: 19px;
+                        background: btn-pair.pressed ? #b4befe : (btn-pair.has-hover ? #d5b8ff : #cba6f7);
+                        animate background { duration: 90ms; }
+
+                        btn-pair := TouchArea {
+                            clicked => { root.submit_pin(root.pairing-pin); }
+                        }
+
+                        Text {
+                            text: "Pair";
+                            color: #11111b; // Crust
+                            font-size: 14px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
                     }
                 }
             }
