@@ -29,7 +29,7 @@ jobs:
             target: aarch64-apple-darwin
             artifact_name: atv-remote-macos-arm64.tar.gz
             binary: target/aarch64-apple-darwin/release/atv-remote
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: atv-remote-macos-x86_64.tar.gz
             binary: target/x86_64-apple-darwin/release/atv-remote
