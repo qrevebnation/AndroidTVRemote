@@ -39,7 +39,6 @@ pub enum PairingError {
     Timeout,
 }
 
-/// Computes the SHA-256 pairing secret from client/server RSA modulus & exponent and 6-hex-char PIN.
 pub fn calculate_pairing_secret(
     client_mod: &[u8],
     client_exp: &[u8],
@@ -70,7 +69,6 @@ pub fn calculate_pairing_secret(
     Ok(result)
 }
 
-/// Extracts RSA modulus and exponent from a DER-encoded X.509 certificate.
 pub fn extract_rsa_pubkey(cert_der: &[u8]) -> Result<(Vec<u8>, Vec<u8>), PairingError> {
     let cert = x509_parser::parse_x509_certificate(cert_der)
         .map_err(|e| PairingError::Protocol(format!("X509 parse error: {e}")))?;
@@ -90,7 +88,7 @@ pub async fn start_pairing(
     client_key: &PrivateKeyDer<'static>,
     pin_rx: tokio::sync::oneshot::Receiver<String>,
 ) -> Result<(), PairingError> {
-    // Official Android TV Remote Pairing port is 6467
+    // Android TV Remote v2 Pairing port is 6467
     start_pairing_with_port(tv_ip, 6467, client_cert, client_key, pin_rx).await
 }
 
@@ -110,15 +108,18 @@ pub async fn start_pairing_with_port(
 
     let connector = TlsConnector::from(Arc::new(config));
     let addr = format!("{}:{}", tv_ip, port);
+    eprintln!("[PAIRING] 1. Connecting TCP to {addr}...");
     let tcp = timeout(NETWORK_TIMEOUT, TcpStream::connect(&addr))
         .await
         .map_err(|_| PairingError::Timeout)??;
     let domain = ServerName::try_from("atvremote".to_string())
         .map_err(|_| PairingError::Protocol("Invalid server name".to_string()))?;
 
+    eprintln!("[PAIRING] 2. Connecting TLS...");
     let mut tls = timeout(NETWORK_TIMEOUT, connector.connect(domain, tcp))
         .await
         .map_err(|_| PairingError::Timeout)??;
+    eprintln!("[PAIRING] 3. TLS connected successfully!");
 
     let server_cert = tls
         .get_ref()
@@ -134,7 +135,7 @@ pub async fn start_pairing_with_port(
     let mut write_buf = BytesMut::new();
     let mut read_buf = BytesMut::new();
 
-    // 1. Send PairingRequest (Polo protocol_version = 2)
+    // 1. Send PairingRequest
     let mut outer = OuterMessage {
         protocol_version: 2,
         status: outer_message::Status::Ok as i32,
@@ -145,9 +146,12 @@ pub async fn start_pairing_with_port(
         ..Default::default()
     };
     encode_frame(&outer, &mut write_buf)?;
+    eprintln!("[PAIRING] 4. Sending PairingRequest: {} bytes", write_buf.len());
     tls.write_all(&write_buf.split()).await?;
+    tls.flush().await?;
 
     // 2. Read PairingRequestAck
+    eprintln!("[PAIRING] 5. Reading PairingRequestAck...");
     let mut temp = [0u8; 1024];
     loop {
         let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
@@ -161,6 +165,7 @@ pub async fn start_pairing_with_port(
         read_buf.extend_from_slice(&temp[..n]);
         if let Some(msg) = decode_frame::<OuterMessage>(&mut read_buf)? {
             if msg.pairing_request_ack.is_some() {
+                eprintln!("[PAIRING] Got PairingRequestAck!");
                 break;
             }
         }
@@ -181,46 +186,80 @@ pub async fn start_pairing_with_port(
         ..Default::default()
     };
     encode_frame(&outer, &mut write_buf)?;
+    eprintln!("[PAIRING] 6. Sending Options: {} bytes", write_buf.len());
     tls.write_all(&write_buf.split()).await?;
+    tls.flush().await?;
 
-    // 4. Read Configuration from TV
+    // 4. Read Options from TV
+    eprintln!("[PAIRING] 7. Reading Options from TV...");
     loop {
         let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
             .await
             .map_err(|_| PairingError::Timeout)??;
         if n == 0 {
             return Err(PairingError::Protocol(
-                "Connection closed waiting for config".to_string(),
+                "Connection closed waiting for options".to_string(),
             ));
         }
         read_buf.extend_from_slice(&temp[..n]);
         if let Some(msg) = decode_frame::<OuterMessage>(&mut read_buf)? {
-            if msg.configuration.is_some() {
+            if msg.options.is_some() {
+                eprintln!("[PAIRING] Got Options from TV!");
                 break;
             }
         }
     }
 
-    // 5. Send ConfigurationAck (TV displays the PIN on screen right after this)
+    // 5. Send Configuration to TV
     outer = OuterMessage {
         protocol_version: 2,
         status: outer_message::Status::Ok as i32,
-        configuration_ack: Some(ConfigurationAck {}),
+        configuration: Some(Configuration {
+            encoding: options::Encoding {
+                r#type: options::encoding::EncodingType::Hexadecimal as i32,
+                symbol_length: 6,
+            },
+            client_role: options::RoleType::Input as i32,
+        }),
         ..Default::default()
     };
     encode_frame(&outer, &mut write_buf)?;
+    eprintln!("[PAIRING] 8. Sending Configuration to TV...");
     tls.write_all(&write_buf.split()).await?;
+    tls.flush().await?;
 
-    // 6. Wait for PIN from user (up to 60 seconds)
+    // 6. Read ConfigurationAck from TV (When TV receives Configuration, it replies with ConfigurationAck AND displays PIN on screen!)
+    eprintln!("[PAIRING] 9. Reading ConfigurationAck from TV...");
+    loop {
+        let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
+            .await
+            .map_err(|_| PairingError::Timeout)??;
+        if n == 0 {
+            return Err(PairingError::Protocol(
+                "Connection closed waiting for configuration ack".to_string(),
+            ));
+        }
+        read_buf.extend_from_slice(&temp[..n]);
+        if let Some(msg) = decode_frame::<OuterMessage>(&mut read_buf)? {
+            if msg.configuration_ack.is_some() {
+                eprintln!("[PAIRING] Got ConfigurationAck from TV! TV is now displaying PIN!");
+                break;
+            }
+        }
+    }
+
+    // 7. Wait for PIN from user (dialog is shown on screen)
+    eprintln!("[PAIRING] 10. Waiting for user PIN input...");
     let pin = timeout(USER_PIN_TIMEOUT, pin_rx)
         .await
         .map_err(|_| PairingError::Timeout)?
         .map_err(|_| PairingError::ChannelClosed)?;
 
+    eprintln!("[PAIRING] 11. Calculating secret for PIN: {pin}...");
     let secret =
         calculate_pairing_secret(&client_mod, &client_exp, &server_mod, &server_exp, &pin)?;
 
-    // 7. Send Secret
+    // 8. Send Secret
     outer = OuterMessage {
         protocol_version: 2,
         status: outer_message::Status::Ok as i32,
@@ -230,9 +269,12 @@ pub async fn start_pairing_with_port(
         ..Default::default()
     };
     encode_frame(&outer, &mut write_buf)?;
+    eprintln!("[PAIRING] 12. Sending Secret...");
     tls.write_all(&write_buf.split()).await?;
+    tls.flush().await?;
 
-    // 8. Read SecretAck
+    // 9. Read SecretAck
+    eprintln!("[PAIRING] 13. Reading SecretAck...");
     loop {
         let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
             .await
@@ -251,6 +293,7 @@ pub async fn start_pairing_with_port(
                 )));
             }
             if msg.secret_ack.is_some() {
+                eprintln!("[PAIRING] 14. Pairing complete and confirmed by TV!");
                 break;
             }
         }

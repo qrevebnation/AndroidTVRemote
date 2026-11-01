@@ -120,31 +120,42 @@ async fn test_mock_tv_end_to_end_pairing_and_remote_control() {
             }
         }
 
-        // Send Configuration
+        // Send Options from TV
         resp = OuterMessage {
             protocol_version: 2,
             status: outer_message::Status::Ok as i32,
-            configuration: Some(Configuration {
-                encoding: options::Encoding {
+            options: Some(Options {
+                output_encodings: vec![options::Encoding {
                     r#type: options::encoding::EncodingType::Hexadecimal as i32,
                     symbol_length: 6,
-                },
-                client_role: options::RoleType::Input as i32,
+                }],
+                preferred_role: Some(options::RoleType::Input as i32),
+                ..Default::default()
             }),
             ..Default::default()
         };
         encode_frame(&resp, &mut write_buf).unwrap();
         tls.write_all(&write_buf.split()).await.unwrap();
 
-        // Read ConfigurationAck
+        // Read Configuration from client
         loop {
             let n = tls.read(&mut temp).await.unwrap();
             read_buf.extend_from_slice(&temp[..n]);
             if let Some(msg) = decode_frame::<OuterMessage>(&mut read_buf).unwrap() {
-                assert!(msg.configuration_ack.is_some());
+                assert!(msg.configuration.is_some());
                 break;
             }
         }
+
+        // Send ConfigurationAck
+        resp = OuterMessage {
+            protocol_version: 2,
+            status: outer_message::Status::Ok as i32,
+            configuration_ack: Some(ConfigurationAck {}),
+            ..Default::default()
+        };
+        encode_frame(&resp, &mut write_buf).unwrap();
+        tls.write_all(&write_buf.split()).await.unwrap();
 
         // TV generates PIN:
         let (c_mod, c_exp) = extract_rsa_pubkey(client_cert_clone.as_ref()).unwrap();

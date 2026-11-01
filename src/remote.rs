@@ -104,6 +104,7 @@ pub async fn run_remote_session_with_port(
     };
     encode_frame(&configure_msg, &mut write_buf)?;
     tls.write_all(&write_buf.split()).await?;
+    let _ = tls.flush().await;
 
     // 2. Wait for confirmation before claiming Connected
     let mut temp = [0u8; 2048];
@@ -164,6 +165,7 @@ pub async fn run_remote_session_with_port(
                                     let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
                                     return Err(RemoteError::Io(e));
                                 }
+                                let _ = tls.flush().await;
                             }
                         }
                         Ok(None) => break,
@@ -193,6 +195,7 @@ pub async fn run_remote_session_with_port(
                             let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
                             return Err(RemoteError::Io(e));
                         }
+                        let _ = tls.flush().await;
                     }
                     Some(Command::LaunchApp(url)) => {
                         let app_msg = RemoteMessage {
@@ -209,6 +212,7 @@ pub async fn run_remote_session_with_port(
                             let _ = status_tx.send(ConnectionState::Disconnected(e.to_string()));
                             return Err(RemoteError::Io(e));
                         }
+                        let _ = tls.flush().await;
                     }
                     Some(Command::Disconnect) | None => {
                         let _ = status_tx.send(ConnectionState::Disconnected("Disconnected by user".to_string()));
