@@ -1,4 +1,5 @@
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use std::path::Path;
 use std::process::Command as SysCommand;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -52,21 +53,35 @@ pub fn init_state() -> Result<SharedState, Box<dyn std::error::Error>> {
 }
 
 pub fn launch_mini_screen(tv_ip: &str) {
-    if tv_ip.trim().is_empty() {
+    let clean_ip = tv_ip.trim();
+    if clean_ip.is_empty() {
         return;
     }
-    // Launch scrcpy over Wi-Fi with compact floating window
-    let _ = SysCommand::new("scrcpy")
-        .args([
-            "--tcpip",
-            tv_ip.trim(),
-            "--always-on-top",
-            "--window-title",
-            "Google TV Mini Screen",
-            "--window-width",
-            "480",
-            "--max-fps",
-            "30",
-        ])
-        .spawn();
+    let ip = clean_ip.to_string();
+    std::thread::spawn(move || {
+        let adb_bin = if Path::new("/home/mnrrochman/android-sdk/platform-tools/adb").exists() {
+            "/home/mnrrochman/android-sdk/platform-tools/adb"
+        } else {
+            "adb"
+        };
+        // Connect ADB over Wi-Fi
+        let _ = SysCommand::new(adb_bin)
+            .args(["connect", &format!("{}:5555", ip)])
+            .output();
+
+        // Launch scrcpy over Wi-Fi with compact floating window
+        let _ = SysCommand::new("scrcpy")
+            .args([
+                "-s",
+                &format!("{}:5555", ip),
+                "--always-on-top",
+                "--window-title",
+                "Google TV Mini Screen",
+                "--window-width",
+                "480",
+                "--max-fps",
+                "30",
+            ])
+            .spawn();
+    });
 }

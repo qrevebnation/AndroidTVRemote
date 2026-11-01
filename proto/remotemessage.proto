@@ -74,6 +74,18 @@ message RemoteConfigure {
   RemoteDeviceInfo device_info = 2;
 }
 
+message RemoteStart {
+  bool started = 1;
+}
+
+message RemoteAppInfo {
+  string app_package = 12;
+}
+
+message RemoteImeKeyInject {
+  RemoteAppInfo app_info = 1;
+}
+
 message RemoteAppLinkLaunchRequest {
   string app_link = 1;
 }
@@ -84,5 +96,7 @@ message RemoteMessage {
   RemotePingRequest remote_ping_request = 8;
   RemotePingResponse remote_ping_response = 9;
   RemoteKeyInject remote_key_inject = 10;
+  RemoteImeKeyInject remote_ime_key_inject = 20;
+  RemoteStart remote_start = 40;
   RemoteAppLinkLaunchRequest remote_app_link_launch_request = 90;
 }

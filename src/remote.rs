@@ -11,10 +11,12 @@ use tokio_rustls::TlsConnector;
 
 use crate::cert::NoVerifyServerCert;
 use crate::codec::{decode_frame, encode_frame};
-use crate::proto::remote::*;
 pub use crate::proto::remote::{RemoteDirection, RemoteKeyCode};
+use crate::proto::remote::*;
 
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(7);
+// Features bitmask: PING (1) | KEY (2) | IME (4) | POWER (32) | VOLUME (64) | APP_LINK (512) = 639
+const CLIENT_FEATURES: i32 = 639;
 
 #[derive(Debug, Clone)]
 pub enum Command {
@@ -86,50 +88,69 @@ pub async fn run_remote_session_with_port(
 
     let mut write_buf = BytesMut::new();
     let mut read_buf = BytesMut::new();
-
-    // 1. Send RemoteConfigure
-    let configure_msg = RemoteMessage {
-        remote_configure: Some(RemoteConfigure {
-            code1: 1,
-            device_info: Some(RemoteDeviceInfo {
-                model: "Desktop Remote".to_string(),
-                vendor: "OpenSource".to_string(),
-                unknown1: 1,
-                unknown2: "1".to_string(),
-                package_name: "atv.remote".to_string(),
-                app_version: "1.0.0".to_string(),
-            }),
-        }),
-        ..Default::default()
-    };
-    encode_frame(&configure_msg, &mut write_buf)?;
-    tls.write_all(&write_buf.split()).await?;
-    let _ = tls.flush().await;
-
-    // 2. Wait for confirmation before claiming Connected
     let mut temp = [0u8; 2048];
-    let mut handshake_confirmed = false;
-    while !handshake_confirmed {
+
+    // Read initial handshake message from TV (TV sends RemoteConfigure)
+    let mut remote_started = false;
+    let mut retry_count = 0;
+
+    while !remote_started && retry_count < 10 {
+        retry_count += 1;
         let n = timeout(NETWORK_TIMEOUT, tls.read(&mut temp))
             .await
             .map_err(|_| RemoteError::Timeout)??;
         if n == 0 {
             let _ = status_tx.send(ConnectionState::Disconnected(
-                "Connection closed by TV".to_string(),
+                "Connection closed by TV during handshake".to_string(),
             ));
-            return Err(RemoteError::Protocol(
-                "Connection closed before configuration ack".to_string(),
-            ));
+            return Err(RemoteError::Protocol("Connection closed before session start".to_string()));
         }
         read_buf.extend_from_slice(&temp[..n]);
+
         while let Some(msg) = decode_frame::<RemoteMessage>(&mut read_buf)? {
-            if msg.remote_configure.is_some() || msg.remote_set_active.is_some() {
-                handshake_confirmed = true;
+            if msg.remote_configure.is_some() {
+                // TV announced its configuration, respond with our client features (including KEY)
+                let resp = RemoteMessage {
+                    remote_configure: Some(RemoteConfigure {
+                        code1: CLIENT_FEATURES,
+                        device_info: Some(RemoteDeviceInfo {
+                            unknown1: 1,
+                            unknown2: "1".to_string(),
+                            package_name: "atvremote".to_string(),
+                            app_version: "1.0.0".to_string(),
+                            ..Default::default()
+                        }),
+                    }),
+                    ..Default::default()
+                };
+                encode_frame(&resp, &mut write_buf)?;
+                tls.write_all(&write_buf.split()).await?;
+                tls.flush().await?;
+            } else if msg.remote_set_active.is_some() {
+                // Acknowledge remote_set_active
+                let resp = RemoteMessage {
+                    remote_set_active: Some(RemoteSetActive {
+                        active: CLIENT_FEATURES,
+                    }),
+                    ..Default::default()
+                };
+                encode_frame(&resp, &mut write_buf)?;
+                tls.write_all(&write_buf.split()).await?;
+                tls.flush().await?;
+            } else if let Some(ref start) = msg.remote_start {
+                if start.started {
+                    remote_started = true;
+                    break;
+                }
+            } else if msg.remote_ping_request.is_some() {
+                // TV is pinging, session is active!
+                remote_started = true;
                 break;
             }
         }
     }
 
+    // Session is officially ready and verified by TV!
     let _ = status_tx.send(ConnectionState::Connected);
 
     loop {
@@ -166,6 +187,10 @@ pub async fn run_remote_session_with_port(
                                     return Err(RemoteError::Io(e));
                                 }
                                 let _ = tls.flush().await;
+                            } else if let Some(ime) = msg.remote_ime_key_inject {
+                                if let Some(app) = ime.app_info {
+                                    let _ = status_tx.send(ConnectionState::ActiveApp(app.app_package));
+                                }
                             }
                         }
                         Ok(None) => break,
