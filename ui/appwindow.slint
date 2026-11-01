@@ -15,6 +15,7 @@ component CatppuccinButton inherits Rectangle {
     animate background { duration: 90ms; }
 
     touch := TouchArea {
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 
@@ -40,20 +41,28 @@ export component AppWindow inherits Window {
     in-out property <string> connection-status: "Disconnected";
     in-out property <color> status-color: #f38ba8; // Catppuccin Red
     in-out property <string> active-app: "";
+    in-out property <bool> is-connected: false;
     in-out property <bool> show-pairing-modal: false;
     in-out property <string> pairing-pin: "";
 
+    // Live In-App Stream Properties
+    in-out property <image> tv-screen-image;
+    in-out property <bool> has-screen-image: false;
+    in-out property <bool> is-streaming: false;
+    in-out property <bool> show-mini-screen-portrait: true;
+
     callback send_key(string);
     callback connect_tv(string);
+    callback disconnect_tv();
     callback submit_pin(string);
     callback cancel_pairing();
-    callback launch_mini_screen();
+    callback toggle_mini_screen();
 
     forward-focus: key-handler;
 
     key-handler := FocusScope {
         key-pressed(event) => {
-            if (root.show-pairing-modal) {
+            if (!root.is-connected || root.show-pairing-modal) {
                 return reject;
             }
             if (event.text == Key.UpArrow) { root.send_key("DPAD_UP"); return accept; }
@@ -71,131 +80,359 @@ export component AppWindow inherits Window {
             reject
         }
 
-        // Center content cleanly on screen even when window is maximized
-        HorizontalLayout {
-            alignment: center;
+        // ============================================================
+        // SISI KIRI: Live TV Screen View (Aktif saat Window Lebar/Fullscreen)
+        // ============================================================
+        if root.width >= 750px : Rectangle {
+            x: 20px;
+            y: 16px;
+            width: root.width - 400px;
+            height: root.height - 32px;
+            background: #11111b; // Crust
+            border-radius: 14px;
+            border-width: 1px;
+            border-color: #313244;
+            clip: true;
 
             VerticalLayout {
-                width: 360px;
-                padding-top: 16px;
-                padding-bottom: 16px;
+                padding: 16px;
                 spacing: 12px;
-                alignment: start;
 
-                // 1. Pixel-Perfect IP Connection Row
+                // Screen Header Bar
                 HorizontalLayout {
-                    spacing: 8px;
-                    alignment: center;
+                    alignment: space-between;
 
-                    // IP Input Container with vertically centered status dot
-                    Rectangle {
-                        horizontal-stretch: 1;
-                        height: 38px;
-                        background: #11111b; // Crust
-                        border-radius: 8px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: center;
+
+                        Rectangle {
+                            width: 8px;
+                            height: 8px;
+                            border-radius: 4px;
+                            background: root.status-color;
+                        }
+
+                        Text {
+                            text: "Google TV Live Screen (360p Video)";
+                            color: #cdd6f4;
+                            font-size: 13px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if root.active-app != "" : Rectangle {
+                        background: #181825;
+                        border-radius: 6px;
                         border-width: 1px;
-                        border-color: #313244; // Surface0
+                        border-color: #313244;
 
                         HorizontalLayout {
-                            padding-left: 10px;
+                            padding-left: 8px;
                             padding-right: 8px;
-                            spacing: 8px;
+                            padding-top: 3px;
+                            padding-bottom: 3px;
+
+                            Text {
+                                text: root.active-app;
+                                color: #b4befe;
+                                font-size: 11px;
+                                font-weight: 600;
+                            }
+                        }
+                    }
+                }
+
+                // In-App Screen Display Area
+                Rectangle {
+                    horizontal-stretch: 1;
+                    vertical-stretch: 1;
+                    background: #000000;
+                    border-radius: 10px;
+                    border-width: 1px;
+                    border-color: #313244;
+                    clip: true;
+
+                    if root.has-screen-image : Image {
+                        width: 100%;
+                        height: 100%;
+                        source: root.tv-screen-image;
+                        image-fit: contain;
+                    }
+
+                    if !root.has-screen-image : VerticalLayout {
+                        alignment: center;
+                        spacing: 16px;
+                        padding: 24px;
+
+                        Text {
+                            text: "📺";
+                            font-size: 56px;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: root.is-connected ? (root.is-streaming ? "Menghubungkan Live Stream..." : "Live Screen Siap") : "Hubungkan ke TV untuk Melihat Layar";
+                            color: root.is-connected ? #a6e3a1 : #a6adc8;
+                            font-size: 16px;
+                            font-weight: 700;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: "Video real-time 360p langsung di dalam remote • Ringan & bebas lag";
+                            color: #6c7086;
+                            font-size: 11px;
+                            horizontal-alignment: center;
+                        }
+
+                        HorizontalLayout {
                             alignment: center;
 
-                            // Status Indicator Dot (Vertically Centered)
+                            Rectangle {
+                                width: 220px;
+                                height: 42px;
+                                border-radius: 21px;
+                                background: btn-wide-launch.pressed ? #313244 : (btn-wide-launch.has-hover ? #45475a : #313244);
+                                border-width: 1px;
+                                border-color: #b4befe;
+                                animate background { duration: 90ms; }
+
+                                btn-wide-launch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => { root.toggle_mini_screen(); }
+                                }
+
+                                Text {
+                                    text: root.is-streaming ? "⏹ Hentikan Stream" : "▶ Mulai Live Screen 360p";
+                                    color: #b4befe;
+                                    font-size: 13px;
+                                    font-weight: 600;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        // SISI KANAN: Panel Tombol Remote (Lebar 360px)
+        // ============================================================
+        VerticalLayout {
+            width: 360px;
+            x: root.width >= 750px ? (root.width - self.width - 20px) : (root.width - self.width) / 2;
+            y: 16px;
+            spacing: 12px;
+            alignment: start;
+
+            // 1. IP Connection & Privacy Control Row
+            if !root.is-connected : HorizontalLayout {
+                spacing: 8px;
+                height: 38px;
+
+                // IP Input Container
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: #11111b; // Crust
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: ip-input.has-focus ? #cba6f7 : #313244;
+                    animate border-color { duration: 150ms; }
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 10px;
+
+                        VerticalLayout {
+                            alignment: center;
                             Rectangle {
                                 width: 8px;
                                 height: 8px;
                                 border-radius: 4px;
                                 background: root.status-color;
                             }
+                        }
 
-                            ip-input := LineEdit {
-                                text <=> root.tv-ip;
-                                placeholder-text: "192.168.1.12";
-                                horizontal-stretch: 1;
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            clip: true;
+
+                            if root.tv-ip == "" && !ip-input.has-focus: Text {
+                                text: "192.168.1.12";
+                                color: #6c7086;
                                 font-size: 13px;
+                                vertical-alignment: center;
+                                horizontal-alignment: left;
+                                width: 100%;
+                                height: 100%;
+                            }
+
+                            ip-input := TextInput {
+                                width: 100%;
+                                height: 100%;
+                                text <=> root.tv-ip;
+                                color: #cdd6f4;
+                                font-size: 13px;
+                                font-weight: 500;
+                                vertical-alignment: center;
+                                horizontal-alignment: left;
+                                single-line: true;
                                 accepted => { root.connect_tv(root.tv-ip); }
                             }
                         }
                     }
+                }
 
-                    // Matching 38px Height Mauve Connect Button
-                    Rectangle {
-                        width: 84px;
-                        height: 38px;
-                        border-radius: 8px;
-                        background: btn-connect.pressed ? #b4befe : (btn-connect.has-hover ? #d5b8ff : #cba6f7); // Mauve
-                        animate background { duration: 90ms; }
+                // Mauve Connect Button
+                Rectangle {
+                    width: 84px;
+                    border-radius: 8px;
+                    background: btn-connect.pressed ? #b4befe : (btn-connect.has-hover ? #d5b8ff : #cba6f7);
+                    animate background { duration: 90ms; }
 
-                        btn-connect := TouchArea {
-                            clicked => { root.connect_tv(root.tv-ip); }
+                    btn-connect := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.connect_tv(root.tv-ip); }
+                    }
+
+                    Text {
+                        text: "Connect";
+                        color: #11111b;
+                        font-size: 13px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // When connected: Protected Privacy Badge + Disconnect Button
+            if root.is-connected : HorizontalLayout {
+                spacing: 8px;
+                height: 38px;
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: #11111b; // Crust
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: #313244;
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        spacing: 10px;
+
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: 8px;
+                                height: 8px;
+                                border-radius: 4px;
+                                background: #a6e3a1; // Green
+                            }
                         }
 
                         Text {
-                            text: "Connect";
-                            color: #11111b; // Crust (contrast > 8:1)
+                            text: "Google TV • Protected Session";
+                            color: #a6adc8;
                             font-size: 13px;
-                            font-weight: 700;
-                            horizontal-alignment: center;
+                            font-weight: 600;
                             vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
                         }
                     }
                 }
 
-                // 2. HUD Status & Mini Screen Row
+                // Red Disconnect Button
                 Rectangle {
-                    height: 44px;
-                    background: #181825; // Mantle
-                    border-radius: 10px;
-                    border-width: 1px;
-                    border-color: #313244; // Surface0
+                    width: 96px;
+                    border-radius: 8px;
+                    background: btn-disconnect.pressed ? #e78284 : (btn-disconnect.has-hover ? #ea999c : #f38ba8); // Red
+                    animate background { duration: 90ms; }
 
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 8px;
-                        spacing: 8px;
+                    btn-disconnect := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.disconnect_tv(); }
+                    }
+
+                    Text {
+                        text: "Disconnect";
+                        color: #11111b;
+                        font-size: 13px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // 2. HUD Status & Mini Screen Row
+            Rectangle {
+                min-height: 46px;
+                background: #181825; // Mantle
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #313244; // Surface0
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 10px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
+                    spacing: 8px;
+
+                    VerticalLayout {
                         alignment: center;
+                        horizontal-stretch: 1;
+                        spacing: 3px;
 
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 1;
-                            spacing: 2px;
-
-                            Text {
-                                text: root.connection-status;
-                                color: root.status-color;
-                                font-size: 12px;
-                                font-weight: 600;
-                                overflow: elide;
-                            }
-
-                            if root.active-app != "": Text {
-                                text: "App: " + root.active-app;
-                                color: #a6adc8; // Subtext0
-                                font-size: 10px;
-                                overflow: elide;
-                            }
+                        Text {
+                            text: root.connection-status;
+                            color: root.status-color;
+                            font-size: 12px;
+                            font-weight: 600;
+                            overflow: elide;
                         }
 
-                        // Lavender Mini Screen Button
+                        if root.active-app != "": Text {
+                            text: "App: " + root.active-app;
+                            color: #a6adc8; // Subtext0
+                            font-size: 10px;
+                            overflow: elide;
+                        }
+                    }
+
+                    // Mini Screen Button (In-app stream toggle)
+                    VerticalLayout {
+                        alignment: center;
+
                         Rectangle {
-                            width: 114px;
-                            height: 30px;
+                            width: 140px;
+                            height: 32px;
                             border-radius: 8px;
                             background: btn-mini.pressed ? #313244 : (btn-mini.has-hover ? #252536 : #181825);
                             border-width: 1px;
-                            border-color: #b4befe; // Lavender
+                            border-color: root.is-streaming ? #a6e3a1 : #b4befe;
                             animate background { duration: 90ms; }
 
                             btn-mini := TouchArea {
-                                clicked => { root.launch_mini_screen(); }
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.toggle_mini_screen();
+                                }
                             }
 
                             Text {
-                                text: "📺 Mini Screen";
-                                color: #b4befe; // Lavender
-                                font-size: 12px;
+                                text: root.is-streaming ? "● Live 360p (ON)" : "▶ Start Live Screen";
+                                color: root.is-streaming ? #a6e3a1 : #b4befe;
+                                font-size: 11px;
                                 font-weight: 600;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
@@ -203,221 +440,292 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
+            }
 
-                // 3. Top Utility Buttons (Power, Settings, Menu)
-                HorizontalLayout {
-                    spacing: 16px;
-                    alignment: center;
+            // 2.5 In-App Mini Screen (Mode Portrait / Tampilan Kecil)
+            if root.width < 750px && root.show-mini-screen-portrait : Rectangle {
+                height: 196px;
+                background: #000000;
+                border-radius: 10px;
+                border-width: 1px;
+                border-color: #313244;
+                clip: true;
 
-                    // Power Button (Catppuccin Red)
-                    CatppuccinButton {
-                        width: 54px;
-                        height: 54px;
-                        text: "⏻";
-                        font-size: 20px;
-                        base-color: #312028;
-                        hover-color: #452834;
-                        active-color: #5c3244;
-                        text-color: #f38ba8; // Red
-                        clicked => { root.send_key("POWER"); }
-                    }
-
-                    // Settings Button (Catppuccin Peach)
-                    CatppuccinButton {
-                        width: 54px;
-                        height: 54px;
-                        text: "⚙";
-                        font-size: 20px;
-                        text-color: #fab387; // Peach
-                        clicked => { root.send_key("SETTINGS"); }
-                    }
-
-                    // Menu Button (Catppuccin Sky)
-                    CatppuccinButton {
-                        width: 54px;
-                        height: 54px;
-                        text: "☰";
-                        font-size: 20px;
-                        text-color: #89dceb; // Sky
-                        clicked => { root.send_key("MENU"); }
-                    }
+                if root.has-screen-image : Image {
+                    width: 100%;
+                    height: 100%;
+                    source: root.tv-screen-image;
+                    image-fit: contain;
                 }
 
-                // 4. D-Pad Controller Wheel
-                Rectangle {
-                    height: 220px;
-                    HorizontalLayout {
+                if !root.has-screen-image : VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+                    padding: 12px;
+
+                    Text {
+                        text: "📺";
+                        font-size: 36px;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: root.is-streaming ? "Memuat Live Stream 360p..." : "Live Screen Belum Aktif";
+                        color: root.is-streaming ? #a6e3a1 : #cdd6f4;
+                        font-size: 12px;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                    }
+
+                    if !root.is-streaming : HorizontalLayout {
                         alignment: center;
+
                         Rectangle {
-                            width: 216px;
-                            height: 216px;
-                            border-radius: 108px;
-                            background: #181825; // Mantle
-                            border-width: 2px;
-                            border-color: #313244; // Surface0
+                            width: 160px;
+                            height: 32px;
+                            border-radius: 16px;
+                            background: btn-start-mini.pressed ? #313244 : (btn-start-mini.has-hover ? #45475a : #313244);
+                            border-width: 1px;
+                            border-color: #b4befe;
 
-                            // UP
-                            CatppuccinButton {
-                                x: 78px;
-                                y: 8px;
-                                width: 60px;
-                                height: 50px;
-                                text: "▲";
-                                font-size: 16px;
-                                base-color: transparent;
-                                hover-color: #313244;
-                                active-color: #45475a;
-                                text-color: #cdd6f4;
-                                clicked => { root.send_key("DPAD_UP"); }
+                            btn-start-mini := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.toggle_mini_screen(); }
                             }
 
-                            // DOWN
-                            CatppuccinButton {
-                                x: 78px;
-                                y: 158px;
-                                width: 60px;
-                                height: 50px;
-                                text: "▼";
-                                font-size: 16px;
-                                base-color: transparent;
-                                hover-color: #313244;
-                                active-color: #45475a;
-                                text-color: #cdd6f4;
-                                clicked => { root.send_key("DPAD_DOWN"); }
-                            }
-
-                            // LEFT
-                            CatppuccinButton {
-                                x: 8px;
-                                y: 78px;
-                                width: 50px;
-                                height: 60px;
-                                text: "◀";
-                                font-size: 16px;
-                                base-color: transparent;
-                                hover-color: #313244;
-                                active-color: #45475a;
-                                text-color: #cdd6f4;
-                                clicked => { root.send_key("DPAD_LEFT"); }
-                            }
-
-                            // RIGHT
-                            CatppuccinButton {
-                                x: 158px;
-                                y: 78px;
-                                width: 50px;
-                                height: 60px;
-                                text: "▶";
-                                font-size: 16px;
-                                base-color: transparent;
-                                hover-color: #313244;
-                                active-color: #45475a;
-                                text-color: #cdd6f4;
-                                clicked => { root.send_key("DPAD_RIGHT"); }
-                            }
-
-                            // CENTER (OK)
-                            CatppuccinButton {
-                                x: 68px;
-                                y: 68px;
-                                width: 80px;
-                                height: 80px;
-                                text: "OK";
-                                font-size: 17px;
-                                base-color: #313244;
-                                hover-color: #45475a;
-                                active-color: #585b70;
-                                text-color: #cba6f7; // Mauve
-                                clicked => { root.send_key("DPAD_CENTER"); }
+                            Text {
+                                text: "▶ Mulai Live Screen";
+                                color: #b4befe;
+                                font-size: 11px;
+                                font-weight: 600;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
                             }
                         }
                     }
+
+                    if root.is-streaming : Text {
+                        text: "Menghubungkan H.264 stream ke TV...";
+                        color: #6c7086;
+                        font-size: 10px;
+                        horizontal-alignment: center;
+                    }
+                }
+            }
+
+            // 3. Top Utility Buttons (Power, Settings, Menu)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                // Power Button (Catppuccin Red)
+                CatppuccinButton {
+                    width: 54px;
+                    height: 54px;
+                    text: "⏻";
+                    font-size: 20px;
+                    base-color: #312028;
+                    hover-color: #452834;
+                    active-color: #5c3244;
+                    text-color: #f38ba8; // Red
+                    clicked => { root.send_key("POWER"); }
                 }
 
-                // 5. Navigation Row (Back, Home, Play/Pause)
+                // Settings Button (Catppuccin Peach)
+                CatppuccinButton {
+                    width: 54px;
+                    height: 54px;
+                    text: "⚙";
+                    font-size: 20px;
+                    text-color: #fab387; // Peach
+                    clicked => { root.send_key("SETTINGS"); }
+                }
+
+                // Menu Button (Catppuccin Sky)
+                CatppuccinButton {
+                    width: 54px;
+                    height: 54px;
+                    text: "☰";
+                    font-size: 20px;
+                    text-color: #89dceb; // Sky
+                    clicked => { root.send_key("MENU"); }
+                }
+            }
+
+            // 4. D-Pad Controller Wheel
+            Rectangle {
+                height: 220px;
                 HorizontalLayout {
-                    spacing: 16px;
                     alignment: center;
+                    Rectangle {
+                        width: 216px;
+                        height: 216px;
+                        border-radius: 108px;
+                        background: #181825; // Mantle
+                        border-width: 2px;
+                        border-color: #313244; // Surface0
 
-                    CatppuccinButton {
-                        width: 58px;
-                        height: 52px;
-                        text: "←";
-                        font-size: 22px;
-                        clicked => { root.send_key("BACK"); }
-                    }
-
-                    CatppuccinButton {
-                        width: 58px;
-                        height: 52px;
-                        text: "⌂";
-                        font-size: 22px;
-                        text-color: #89b4fa; // Blue
-                        clicked => { root.send_key("HOME"); }
-                    }
-
-                    CatppuccinButton {
-                        width: 58px;
-                        height: 52px;
-                        text: "⏯";
-                        font-size: 18px;
-                        text-color: #a6e3a1; // Green
-                        clicked => { root.send_key("PLAY_PAUSE"); }
-                    }
-                }
-
-                // 6. Volume Controls Row
-                HorizontalLayout {
-                    spacing: 16px;
-                    alignment: center;
-
-                    CatppuccinButton {
-                        width: 58px;
-                        height: 52px;
-                        text: "–";
-                        font-size: 24px;
-                        clicked => { root.send_key("VOLUME_DOWN"); }
-                    }
-
-                    CatppuccinButton {
-                        width: 58px;
-                        height: 52px;
-                        text: "🔇";
-                        font-size: 18px;
-                        text-color: #f38ba8; // Red
-                        clicked => { root.send_key("MUTE"); }
-                    }
-
-                    CatppuccinButton {
-                        width: 58px;
-                        height: 52px;
-                        text: "+";
-                        font-size: 24px;
-                        clicked => { root.send_key("VOLUME_UP"); }
-                    }
-                }
-
-                // 7. Clean Keyboard Shortcuts Footnote
-                Rectangle {
-                    height: 28px;
-                    background: #11111b; // Crust
-                    border-radius: 8px;
-                    border-width: 1px;
-                    border-color: #313244; // Surface0
-
-                    HorizontalLayout {
-                        padding-left: 10px;
-                        padding-right: 10px;
-                        alignment: center;
-
-                        Text {
-                            text: "⌨ Shortcuts: Arrows • Enter/Space • Esc • H • +/-";
-                            color: #a6adc8; // Subtext0
-                            font-size: 10px;
-                            font-weight: 500;
-                            vertical-alignment: center;
-                            horizontal-alignment: center;
+                        // UP
+                        CatppuccinButton {
+                            x: 78px;
+                            y: 8px;
+                            width: 60px;
+                            height: 50px;
+                            text: "▲";
+                            font-size: 16px;
+                            base-color: transparent;
+                            hover-color: #313244;
+                            active-color: #45475a;
+                            text-color: #cdd6f4;
+                            clicked => { root.send_key("DPAD_UP"); }
                         }
+
+                        // DOWN
+                        CatppuccinButton {
+                            x: 78px;
+                            y: 158px;
+                            width: 60px;
+                            height: 50px;
+                            text: "▼";
+                            font-size: 16px;
+                            base-color: transparent;
+                            hover-color: #313244;
+                            active-color: #45475a;
+                            text-color: #cdd6f4;
+                            clicked => { root.send_key("DPAD_DOWN"); }
+                        }
+
+                        // LEFT
+                        CatppuccinButton {
+                            x: 8px;
+                            y: 78px;
+                            width: 50px;
+                            height: 60px;
+                            text: "◀";
+                            font-size: 16px;
+                            base-color: transparent;
+                            hover-color: #313244;
+                            active-color: #45475a;
+                            text-color: #cdd6f4;
+                            clicked => { root.send_key("DPAD_LEFT"); }
+                        }
+
+                        // RIGHT
+                        CatppuccinButton {
+                            x: 158px;
+                            y: 78px;
+                            width: 50px;
+                            height: 60px;
+                            text: "▶";
+                            font-size: 16px;
+                            base-color: transparent;
+                            hover-color: #313244;
+                            active-color: #45475a;
+                            text-color: #cdd6f4;
+                            clicked => { root.send_key("DPAD_RIGHT"); }
+                        }
+
+                        // CENTER (OK)
+                        CatppuccinButton {
+                            x: 68px;
+                            y: 68px;
+                            width: 80px;
+                            height: 80px;
+                            text: "OK";
+                            font-size: 17px;
+                            base-color: #313244;
+                            hover-color: #45475a;
+                            active-color: #585b70;
+                            text-color: #cba6f7; // Mauve
+                            clicked => { root.send_key("DPAD_CENTER"); }
+                        }
+                    }
+                }
+            }
+
+            // 5. Navigation Row (Back, Home, Play/Pause)
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                CatppuccinButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "←";
+                    font-size: 22px;
+                    clicked => { root.send_key("BACK"); }
+                }
+
+                CatppuccinButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "⌂";
+                    font-size: 22px;
+                    text-color: #89b4fa; // Blue
+                    clicked => { root.send_key("HOME"); }
+                }
+
+                CatppuccinButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "⏯";
+                    font-size: 18px;
+                    text-color: #a6e3a1; // Green
+                    clicked => { root.send_key("PLAY_PAUSE"); }
+                }
+            }
+
+            // 6. Volume Controls Row
+            HorizontalLayout {
+                spacing: 16px;
+                alignment: center;
+
+                CatppuccinButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "–";
+                    font-size: 24px;
+                    clicked => { root.send_key("VOLUME_DOWN"); }
+                }
+
+                CatppuccinButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "🔇";
+                    font-size: 18px;
+                    text-color: #f38ba8; // Red
+                    clicked => { root.send_key("MUTE"); }
+                }
+
+                CatppuccinButton {
+                    width: 58px;
+                    height: 52px;
+                    text: "+";
+                    font-size: 24px;
+                    clicked => { root.send_key("VOLUME_UP"); }
+                }
+            }
+
+            // 7. Clean Keyboard Shortcuts Footnote
+            Rectangle {
+                height: 28px;
+                background: #11111b; // Crust
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: #313244; // Surface0
+
+                HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    alignment: center;
+
+                    Text {
+                        text: "⌨ Shortcuts: Arrows • Enter/Space • Esc • H • +/-";
+                        color: #a6adc8; // Subtext0
+                        font-size: 10px;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
                     }
                 }
             }

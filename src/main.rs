@@ -1,5 +1,5 @@
 use atv_remote::app::{
-    get_adb_binary, init_state, launch_mini_screen, map_key_string, send_adb_key, SharedState,
+    get_adb_binary, init_state, map_key_string, send_adb_key, start_inapp_stream, SharedState,
 };
 use atv_remote::pairing::start_pairing;
 use atv_remote::remote::{run_remote_session, Command as RemoteCommand, ConnectionState};
@@ -7,6 +7,7 @@ use atv_remote::ui::AppWindow;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use slint::{ComponentHandle, Weak};
 use std::process::Command as SysCommand;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 
@@ -32,6 +33,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Background worker thread
     let state_clone = Arc::clone(&state);
     let weak_window = app_window.as_weak();
+    let stream_running = Arc::new(AtomicBool::new(false));
+
     std::thread::spawn(move || {
         rt.block_on(async move {
             let mut current_session: Option<tokio::task::JoinHandle<()>> = None;
@@ -45,6 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                         let weak = weak_window.clone();
                         let state = Arc::clone(&state_clone);
+                        let stream_running_conn = Arc::clone(&stream_running);
 
                         // Warm up ADB in background
                         let ip_clone = ip.clone();
@@ -77,20 +81,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
 
                                 let weak_stat = weak.clone();
+                                let stream_run = Arc::clone(&stream_running_conn);
+                                let ip_stream = ip.clone();
                                 tokio::spawn(async move {
                                     while let Some(stat) = status_rx.recv().await {
+                                        let stream_run_sub = Arc::clone(&stream_run);
+                                        let ip_sub = ip_stream.clone();
+                                        let weak_sub = weak_stat.clone();
                                         let _ = weak_stat.upgrade_in_event_loop(move |w| match stat {
                                             ConnectionState::Connecting => {
                                                 w.set_connection_status("Connecting...".into());
                                                 w.set_status_color(slint::Color::from_rgb_u8(255, 179, 0));
+                                                w.set_is_connected(false);
                                             }
                                             ConnectionState::Connected => {
                                                 w.set_connection_status("Connected".into());
                                                 w.set_status_color(slint::Color::from_rgb_u8(76, 175, 80)); // Green
+                                                w.set_is_connected(true);
+                                                w.set_is_streaming(true);
+                                                if !stream_run_sub.load(Ordering::SeqCst) {
+                                                    stream_run_sub.store(true, Ordering::SeqCst);
+                                                    start_inapp_stream(&ip_sub, weak_sub, stream_run_sub);
+                                                }
                                             }
                                             ConnectionState::Disconnected(reason) => {
                                                 w.set_connection_status(format!("Disconnected: {reason}").into());
                                                 w.set_status_color(slint::Color::from_rgb_u8(244, 67, 54)); // Red
+                                                w.set_is_connected(false);
+                                                w.set_has_screen_image(false);
+                                                w.set_is_streaming(false);
                                             }
                                             ConnectionState::ActiveApp(app) => {
                                                 w.set_active_app(app.into());
@@ -119,11 +138,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             g.config.paired = false;
                                             let _ = g.config.save();
                                         }
-                                        execute_pairing(&ip, cert, key, weak, state).await;
+                                        execute_pairing(&ip, cert, key, weak, state, stream_running_conn).await;
                                     }
                                 }
                             } else {
-                                execute_pairing(&ip, cert, key, weak, state).await;
+                                execute_pairing(&ip, cert, key, weak, state, stream_running_conn).await;
                             }
                         }));
                     }
@@ -141,9 +160,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
 
-                        // Also send via ADB for instant dual-path responsiveness
-                        send_adb_key(&last_ip, &key_name);
-                        let _ = sent_tls;
+                        // Only fallback to ADB if TLS remote session is not connected
+                        if !sent_tls {
+                            send_adb_key(&last_ip, &key_name);
+                        }
                     }
 
                     Action::SubmitPin(pin) => {
@@ -158,8 +178,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         g.pin_tx = None;
                     }
 
-                    Action::LaunchMiniScreen(ip) => {
-                        launch_mini_screen(&ip);
+                    Action::Disconnect => {
+                        stream_running.store(false, Ordering::SeqCst);
+                        let _ = SysCommand::new("pkill")
+                            .args(["-f", "screenrecord"])
+                            .output();
+                        let _ = SysCommand::new("pkill")
+                            .args(["-f", "scrcpy"])
+                            .output();
+                        if let Some(handle) = current_session.take() {
+                            handle.abort();
+                        }
+                        {
+                            let mut g = state_clone.lock().await;
+                            g.cmd_tx = None;
+                        }
+                        let _ = weak_window.upgrade_in_event_loop(|w| {
+                            w.set_connection_status("Disconnected".into());
+                            w.set_status_color(slint::Color::from_rgb_u8(243, 139, 168)); // Red
+                            w.set_active_app("".into());
+                            w.set_is_connected(false);
+                            w.set_has_screen_image(false);
+                            w.set_is_streaming(false);
+                        });
+                    }
+
+                    Action::ToggleMiniScreen => {
+                        let is_active = stream_running.load(Ordering::SeqCst);
+                        if is_active {
+                            stream_running.store(false, Ordering::SeqCst);
+                            let _ = SysCommand::new("pkill")
+                                .args(["-f", "screenrecord"])
+                                .output();
+                            let _ = weak_window.upgrade_in_event_loop(|w| {
+                                w.set_is_streaming(false);
+                                w.set_has_screen_image(false);
+                            });
+                        } else {
+                            let last_ip = weak_window
+                                .upgrade()
+                                .map(|w| w.get_tv_ip().to_string())
+                                .filter(|s| !s.trim().is_empty())
+                                .unwrap_or_else(|| "192.168.1.12".to_string());
+                            stream_running.store(true, Ordering::SeqCst);
+                            let _ = weak_window.upgrade_in_event_loop(|w| {
+                                w.set_show_mini_screen_portrait(true);
+                                w.set_is_streaming(true);
+                            });
+                            start_inapp_stream(&last_ip, weak_window.clone(), stream_running.clone());
+                        }
                     }
                 }
             }
@@ -178,6 +245,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let act_tx = action_tx.clone();
+    app_window.on_disconnect_tv(move || {
+        let _ = act_tx.send(Action::Disconnect);
+    });
+
+    let act_tx = action_tx.clone();
     app_window.on_submit_pin(move |pin| {
         let _ = act_tx.send(Action::SubmitPin(pin.to_string()));
     });
@@ -187,14 +259,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = act_tx.send(Action::CancelPairing);
     });
 
-    let act_tx = action_tx;
-    let weak_ip = app_window.as_weak();
-    app_window.on_launch_mini_screen(move || {
-        let ip = weak_ip
-            .upgrade()
-            .map(|w| w.get_tv_ip().to_string())
-            .unwrap_or_default();
-        let _ = act_tx.send(Action::LaunchMiniScreen(ip));
+    let act_tx = action_tx.clone();
+    app_window.on_toggle_mini_screen(move || {
+        let _ = act_tx.send(Action::ToggleMiniScreen);
     });
 
     app_window.run()?;
@@ -207,6 +274,7 @@ async fn execute_pairing(
     key: PrivateKeyDer<'static>,
     weak: Weak<AppWindow>,
     state: SharedState,
+    stream_running: Arc<AtomicBool>,
 ) {
     let (pin_tx, pin_rx) = oneshot::channel();
     {
@@ -244,16 +312,30 @@ async fn execute_pairing(
             }
 
             let weak_stat = weak.clone();
+            let stream_run = Arc::clone(&stream_running);
+            let ip_str = ip.to_string();
             tokio::spawn(async move {
                 while let Some(stat) = status_rx.recv().await {
+                    let stream_sub = Arc::clone(&stream_run);
+                    let ip_sub = ip_str.clone();
+                    let weak_sub = weak_stat.clone();
                     let _ = weak_stat.upgrade_in_event_loop(move |w| match stat {
                         ConnectionState::Connected => {
                             w.set_connection_status("Connected".into());
                             w.set_status_color(slint::Color::from_rgb_u8(76, 175, 80));
+                            w.set_is_connected(true);
+                            w.set_is_streaming(true);
+                            if !stream_sub.load(Ordering::SeqCst) {
+                                stream_sub.store(true, Ordering::SeqCst);
+                                start_inapp_stream(&ip_sub, weak_sub, stream_sub);
+                            }
                         }
                         ConnectionState::Disconnected(reason) => {
                             w.set_connection_status(format!("Disconnected: {reason}").into());
                             w.set_status_color(slint::Color::from_rgb_u8(244, 67, 54));
+                            w.set_is_connected(false);
+                            w.set_has_screen_image(false);
+                            w.set_is_streaming(false);
                         }
                         _ => {}
                     });
@@ -267,6 +349,7 @@ async fn execute_pairing(
                 w.set_show_pairing_modal(false);
                 w.set_connection_status(format!("Pairing failed: {e}").into());
                 w.set_status_color(slint::Color::from_rgb_u8(244, 67, 54));
+                w.set_is_connected(false);
             });
         }
     }
@@ -274,8 +357,9 @@ async fn execute_pairing(
 
 enum Action {
     Connect(String),
+    Disconnect,
     SendKey(String),
     SubmitPin(String),
     CancelPairing,
-    LaunchMiniScreen(String),
+    ToggleMiniScreen,
 }
